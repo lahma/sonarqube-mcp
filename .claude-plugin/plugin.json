@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "sonarqube-mcp",
+  "displayName": "SonarQube Cloud code quality",
+  "version": "1.0.0",
+  "description": "The sonarqube-mcp server plus the code-quality workflow skill: quality gates, issue triage, security hotspots, measures and per-line coverage from SonarQube Cloud.",
+  "author": {
+    "name": "lahma",
+    "url": "https://github.com/lahma"
+  },
+  "homepage": "https://github.com/lahma/sonarqube-mcp#readme",
+  "repository": "https://github.com/lahma/sonarqube-mcp",
+  "license": "MIT",
+  "keywords": ["sonarqube", "sonarcloud", "code-quality", "static-analysis", "mcp"],
+  "skills": ["./.claude/skills/sonarqube-code-quality"],
+  "mcpServers": {
+    "sonarqube": {
+      "command": "dnx",
+      "args": ["sonarqube-mcp@1.0.0", "--yes"],
+      "env": {
+        "SONARQUBE_TOKEN": "${user_config.sonarqube_token}",
+        "SONARQUBE_ORG": "${user_config.sonarqube_org}",
+        "SONARQUBE_URL": "${user_config.sonarqube_url}",
+        "SONARQUBE_MCP_DEFAULT_PROJECT": "${user_config.sonarqube_default_project}",
+        "SONARQUBE_MCP_READ_ONLY": "${user_config.sonarqube_read_only}"
+      }
+    }
+  },
+  "userConfig": {
+    "sonarqube_token": {
+      "type": "string",
+      "title": "SonarQube Cloud user token",
+      "description": "Created at https://sonarcloud.io/account/security — pick the User Token type, not a project analysis token. Leave it blank to read public projects anonymously.",
+      "sensitive": true,
+      "default": ""
+    },
+    "sonarqube_org": {
+      "type": "string",
+      "title": "Organization key",
+      "description": "The last segment of https://sonarcloud.io/organizations/{key}. Needed to list projects and to read rule explanations; everything else works without it.",
+      "default": ""
+    },
+    "sonarqube_default_project": {
+      "type": "string",
+      "title": "Default project key",
+      "description": "The id in a sonarcloud.io project URL, not the repository name. Set it and the projectKey argument becomes optional on every tool.",
+      "default": ""
+    },
+    "sonarqube_read_only": {
+      "type": "string",
+      "title": "Read-only mode",
+      "description": "Set to 1 to leave the four write tools unregistered, so no model can transition, assign, comment on or close anything.",
+      "default": ""
+    },
+    "sonarqube_url": {
+      "type": "string",
+      "title": "Base URL",
+      "description": "Only wanted on sonarqube.us. Blank means https://sonarcloud.io; SonarQube Server is out of scope.",
+      "default": ""
+    }
+  }
+}

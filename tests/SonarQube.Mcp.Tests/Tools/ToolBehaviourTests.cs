@@ -1,0 +1,1941 @@
+using System.Net;
+using System.Text.Json;
+
+using ModelContextProtocol;
+
+using SonarQube.Mcp.Tests.Http;
+using SonarQube.Mcp.Tools;
+using SonarQube.Mcp.Tools.Models;
+
+using Xunit;
+
+namespace SonarQube.Mcp.Tests.Tools;
+
+/// <summary>
+/// What the tools actually do with their arguments: the requests they compose, the argument
+/// validation they refuse to send, and the shape of what comes back.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Everything runs through the real <c>SonarApiClient</c> over a stub transport, so these tests see
+/// the URLs, form bodies and JSON an MCP client's call would produce — and the responses are the
+/// golden fixtures wherever a live capture exists, so "the mapper handles it" is a claim about
+/// SonarQube's actual output rather than about a payload written to suit the mapper.
+/// </para>
+/// <para>
+/// The recurring shape of a validation test is <c>Assert.Empty(handler.Requests)</c>: an argument
+/// this server can reject itself must cost the caller nothing, and a message about <c>pageSize</c>
+/// that arrives after a round trip has already spent the thing it was protecting.
+/// </para>
+/// </remarks>
+public class ToolBehaviourTests
+{
+    private const string Project = ToolTestHost.Project;
+    private const string FileKey = ToolTestHost.FileComponent;
+    private const string IssueKey = "AZ_xePOumT_q4T_1FWf8";
+    private const string HotspotKey = "AZvu8ZyfNsnCVHe5poFs";
+
+    private static readonly string[] Ncloc = ["ncloc"];
+    private static readonly string[] NclocAndRating = ["ncloc", "sqale_rating", "new_coverage"];
+
+    // ---------------------------------------------------------------------------------------
+    // listProjects
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ListProjectsSearchesComponentsInTheConfiguredOrganization()
+    {
+        using var handler = Stub("components-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.ListProjectsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            query: "quartz",
+            page: 2,
+            pageSize: 25,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/components/search", Path(handler));
+        Assert.Equal("quartznet", Query(handler, "organization"));
+        Assert.Equal("TRK", Query(handler, "qualifiers"));
+        Assert.Equal("quartz", Query(handler, "q"));
+        Assert.Equal("2", Query(handler, "p"));
+        Assert.Equal("25", Query(handler, "ps"));
+
+        var project = Assert.Single(result.Projects);
+
+        Assert.Equal(Project, project.Key);
+        Assert.Equal("https://sonarcloud.io/project/overview?id=quartznet_quartznet", project.Url);
+    }
+
+    [Fact]
+    public async Task ListProjectsWithoutAnOrganizationNamesTheVariableAndSendsNothing()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.ListProjectsAsync(
+                client,
+                ToolTestHost.CreateOptions(organization: null),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("SONARQUBE_ORG", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>
+    /// Clamping is silent: the binding constraint is the model's context rather than the API's
+    /// ceiling, so a caller asking for 500 rows is answered with fewer rather than refused.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "50")]
+    [InlineData(0, "1")]
+    [InlineData(-7, "1")]
+    [InlineData(25, "25")]
+    [InlineData(100, "100")]
+    [InlineData(500, "100")]
+    [InlineData(10_000, "100")]
+    public async Task PageSizeIsClampedIntoTheConfiguredRange(int? requested, string expected)
+    {
+        using var handler = Stub("components-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await ProjectReadTools.ListProjectsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            pageSize: requested,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, Query(handler, "ps"));
+    }
+
+    [Theory]
+    [InlineData(null, "1")]
+    [InlineData(0, "1")]
+    [InlineData(-3, "1")]
+    [InlineData(4, "4")]
+    public async Task PageIsAlwaysAtLeastOne(int? requested, string expected)
+    {
+        using var handler = Stub("components-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await ProjectReadTools.ListProjectsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            page: requested,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, Query(handler, "p"));
+    }
+
+    /// <summary>
+    /// The 10,000-result window is not clamped, because there is no smaller answer to give: the
+    /// requested page does not exist and never will. It is refused before a request is made.
+    /// </summary>
+    [Fact]
+    public async Task APageBeyondTheResultWindowIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.ListProjectsAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                page: 200,
+                pageSize: 100,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("10000", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("narrow the search", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // listComponents
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ListComponentsDefaultsToTheFilesInTheWholeProject()
+    {
+        using var handler = Stub("components-tree-leaves.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.ListComponentsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/components/tree", Path(handler));
+        Assert.Equal(Project, Query(handler, "component"));
+        Assert.Equal("leaves", Query(handler, "strategy"));
+        Assert.Equal("FIL,UTS", Query(handler, "qualifiers"));
+
+        Assert.Equal(3, result.Components.Count);
+        Assert.Equal(".github/ISSUE_TEMPLATE/01_bug_report.yml", result.Components[0].Path);
+        Assert.True(result.HasMore);
+        Assert.Equal(1048, result.TotalCount);
+    }
+
+    [Theory]
+    [InlineData("files", "leaves", "FIL,UTS")]
+    [InlineData("directories", "children", "DIR")]
+    [InlineData("all", "all", null)]
+    public async Task ScopeChoosesTheStrategyAndQualifierPair(string scope, string strategy, string? qualifiers)
+    {
+        using var handler = Stub("components-tree-leaves.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await ProjectReadTools.ListComponentsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            scope: scope,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(strategy, Query(handler, "strategy"));
+        Assert.Equal(qualifiers, Query(handler, "qualifiers"));
+    }
+
+    [Fact]
+    public async Task AnUnknownScopeIsRefusedWithTheThreeThatWork()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.ListComponentsAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                scope: "everything",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("files, directories or all", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>
+    /// The pair is mutually exclusive on every endpoint that takes it, so it is validated once — and
+    /// before the request, because SonarQube answers the combination with an opaque 400.
+    /// </summary>
+    [Fact]
+    public async Task BranchAndPullRequestTogetherAreRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.ListComponentsAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                branch: "main",
+                pullRequest: "3266",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("mutually exclusive", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task AProjectKeyArgumentBeatsTheEnvironmentDefault()
+    {
+        using var handler = Stub("components-tree-leaves.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await ProjectReadTools.ListComponentsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            projectKey: "other_project",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("other_project", Query(handler, "component"));
+    }
+
+    [Fact]
+    public async Task WithNoProjectAnywhereTheErrorNamesTheVariableAndListProjects()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.ListComponentsAsync(
+                client,
+                ToolTestHost.CreateOptions(defaultProject: null),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("SONARQUBE_MCP_DEFAULT_PROJECT", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("listProjects", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // listBranches, listPullRequests, getQualityGateStatus
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ListBranchesAsksTheUnpaginatedEndpointAndMarksTheMainBranch()
+    {
+        using var handler = Stub("project-branches-list.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.ListBranchesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/project_branches/list", Path(handler));
+        Assert.Equal(["project"], Names(handler));
+
+        var branch = Assert.Single(result.Branches);
+
+        Assert.Equal("main", branch.Name);
+        Assert.True(branch.IsMain);
+        Assert.Equal(140, branch.Bugs);
+        Assert.Equal("a8dc2ec41b298390fb1f48ca3f2ef4d4d85128eb", branch.CommitSha);
+        Assert.Equal(
+            "https://sonarcloud.io/project/overview?id=quartznet_quartznet&branch=main",
+            branch.Url);
+    }
+
+    [Fact]
+    public async Task ListPullRequestsReportsTheKeyToPassBackAndTheGateStatus()
+    {
+        using var handler = Stub("project-pull-requests-list.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.ListPullRequestsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/project_pull_requests/list", Path(handler));
+        Assert.Equal(2, result.PullRequests.Count);
+
+        var failing = result.PullRequests[1];
+
+        Assert.Equal("3267", failing.Key);
+        Assert.Equal("main", failing.Base);
+        Assert.Equal("ERROR", failing.QualityGateStatus);
+        Assert.Equal("https://github.com/quartznet/quartznet/pull/3267", failing.ScmUrl);
+        Assert.Equal(
+            "https://sonarcloud.io/project/overview?id=quartznet_quartznet&pullRequest=3267",
+            failing.Url);
+    }
+
+    [Fact]
+    public async Task AQualityGateWithNoVerdictYetIsExplainedRatherThanReportedAsAFailure()
+    {
+        using var handler = Stub("qualitygates-project-status-none.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.GetQualityGateStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("NONE", result.Status);
+        Assert.Empty(result.Conditions);
+        Assert.NotNull(result.Note);
+        Assert.Contains("not an error", result.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AFailingGateArrivesWithItsFailuresAlreadyFilteredAndItsRatingsAsLetters()
+    {
+        using var handler = Stub("qualitygates-project-status-error.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.GetQualityGateStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            pullRequest: "3267",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("3267", Query(handler, "pullRequest"));
+        Assert.Equal("ERROR", result.Status);
+        Assert.Equal(5, result.Conditions.Count);
+        Assert.Equal(2, result.FailingConditions.Count);
+
+        var rating = result.FailingConditions[0];
+
+        Assert.Equal("new_reliability_rating", rating.Metric);
+        Assert.Equal("A", rating.Threshold);
+        Assert.Equal("B", rating.ActualValue);
+        Assert.True(rating.OnNewCode);
+
+        // A non-rating metric keeps the number SonarQube sent.
+        Assert.Equal("4.8", result.FailingConditions[1].ActualValue);
+        Assert.Null(result.Note);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // searchIssues
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task SearchIssuesDefaultsToTheWorkThatIsStillOutstanding()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/issues/search", Path(handler));
+        Assert.Equal("OPEN,CONFIRMED", Query(handler, "issueStatuses"));
+        Assert.Equal(Project, Query(handler, "componentKeys"));
+
+        // Always sent: the sidecar the file-path join needs, and never _all, which drags a
+        // fifty-element languages array onto every response.
+        Assert.Equal("rules", Query(handler, "additionalFields"));
+
+        Assert.Equal("CREATION_DATE", Query(handler, "s"));
+        Assert.Equal("false", Query(handler, "asc"));
+    }
+
+    [Fact]
+    public async Task AnExplicitStatusListReplacesTheDefaultRatherThanAddingToIt()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            issueStatuses: ["accepted", "FIXED", "ACCEPTED"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // Upper-cased and deduplicated, in the order the caller gave them.
+        Assert.Equal("ACCEPTED,FIXED", Query(handler, "issueStatuses"));
+    }
+
+    /// <summary>
+    /// <c>asc</c> is sent on every call, including the default. It is a plain <c>bool</c> rather
+    /// than <c>bool?</c> precisely so the sort direction is never left to the endpoint's own
+    /// default, which is ascending — the opposite of what a triage list wants.
+    /// </summary>
+    [Fact]
+    public async Task TheSortDirectionIsAlwaysStatedExplicitly()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            sortBy: "severity",
+            ascending: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("SEVERITY", Query(handler, "s"));
+        Assert.Equal("true", Query(handler, "asc"));
+    }
+
+    [Theory]
+    [InlineData("src/Widget.cs", "quartznet_quartznet:src/Widget.cs")]
+    [InlineData("quartznet_quartznet:src/Widget.cs", "quartznet_quartznet:src/Widget.cs")]
+    [InlineData("src\\Widget.cs", "quartznet_quartznet:src/Widget.cs")]
+    [InlineData("./src/Widget.cs", "quartznet_quartznet:src/Widget.cs")]
+    [InlineData("/src/Widget.cs", "quartznet_quartznet:src/Widget.cs")]
+    [InlineData("quartznet_quartznet", "quartznet_quartznet")]
+    public async Task AComponentIsAcceptedAsAPathOrAsAKey(string component, string expected)
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            component: component,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, Query(handler, "componentKeys"));
+    }
+
+    [Fact]
+    public async Task AComponentThatNormalisesToNothingIsRefused()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                component: "./",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("listComponents", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task SearchIssuesRefusesBranchAndPullRequestTogetherBeforeAnyRequest()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                branch: "main",
+                pullRequest: "3266",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task TheNewCodeFilterIsSentUnderTheNameTheApiUses()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            inNewCodePeriod: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("true", Query(handler, "sinceLeakPeriod"));
+        Assert.DoesNotContain("inNewCodePeriod", Names(handler));
+    }
+
+    /// <summary>
+    /// The legacy vocabularies are rejected <em>with the translation</em>. A model trained before
+    /// 2024 reaches for MAJOR and CODE_SMELL, and SonarQube's own 400 lists the accepted values
+    /// without saying which of them means what was asked for.
+    /// </summary>
+    [Fact]
+    public async Task ALegacySeverityIsRejectedWithItsModernEquivalent()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                impactSeverities: ["MAJOR"],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("MAJOR is now MEDIUM", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("INFO, LOW, MEDIUM, HIGH, BLOCKER", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ALegacyIssueTypeIsRejectedWithItsCleanCodeEquivalent()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                impactSoftwareQualities: ["CODE_SMELL"],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("CODE_SMELL is now MAINTAINABILITY", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ALegacyStatusIsRejectedWithTheThreeStatusesItSplitInto()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                issueStatuses: ["RESOLVED"],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("RESOLVED split into FALSE_POSITIVE, ACCEPTED and FIXED", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task TheTwoCreationDateFiltersAreRefusedTogether()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                createdAfter: "2026-01-01",
+                createdInLast: "7d",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("mutually exclusive", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("7 days")]
+    [InlineData("d")]
+    [InlineData("7x")]
+    public async Task AMalformedRelativeWindowNamesTheFormsThatWork(string createdInLast)
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                createdInLast: createdInLast,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("7d, 2w, 1m, 1y", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task AnUnsortableFieldIsRefusedWithTheSevenThatAreSortable()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                sortBy: "RANDOM",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("CREATION_DATE", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>
+    /// The single biggest context saving in the tool layer: the model sees
+    /// <c>src/…/QuartzScheduler.cs</c> rather than <c>quartznet_quartznet:src/…/QuartzScheduler.cs</c>
+    /// repeated on every row, with the key still available when it needs one back.
+    /// </summary>
+    [Fact]
+    public async Task IssuesComeBackWithTheirFilePathJoinedFromTheComponentsSidecar()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.All(result.Issues, issue => Assert.False(string.IsNullOrEmpty(issue.File)));
+        Assert.All(result.Issues, issue => Assert.DoesNotContain(':', issue.File!));
+
+        var second = result.Issues[1];
+
+        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", second.File);
+        Assert.Equal(FileKey, second.Component);
+        Assert.Equal(943, second.Line);
+        Assert.Equal("MAINTAINABILITY", Assert.Single(second.Impacts).SoftwareQuality);
+        Assert.Equal(1606, result.TotalCount);
+        Assert.True(result.HasMore);
+    }
+
+    [Fact]
+    public async Task AResultSetLargerThanTheWindowCarriesTheWarningBeforeTheCallerPagesIntoIt()
+    {
+        using var handler = Stub("issues-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // 1606 results is under the cap, so there is nothing to warn about.
+        Assert.Null(result.Note);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getIssue
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetIssueAsksTheSearchEndpointForOneKeyWithItsTransitionsAndComments()
+    {
+        using var handler = Stub("issues-search-single.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/issues/search", Path(handler));
+        Assert.Equal(IssueKey, Query(handler, "issues"));
+        Assert.Equal("transitions,comments,rules,users", Query(handler, "additionalFields"));
+        Assert.Equal("1", Query(handler, "ps"));
+
+        Assert.Equal(IssueKey, result.Key);
+        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", result.File);
+        Assert.Equal(
+            "Null-forgiving operators should not be used when nullable warnings are disabled",
+            result.RuleName);
+        Assert.Empty(result.AvailableTransitions);
+        Assert.Equal(
+            "https://sonarcloud.io/project/issues?id=quartznet_quartznet&issues=AZ_xePOumT_q4T_1FWf8&open=AZ_xePOumT_q4T_1FWf8",
+            result.Url);
+    }
+
+    [Fact]
+    public async Task AnIssueKeyThatMatchesNothingSaysWhereToLookInstead()
+    {
+        using var handler = Stub("issues-search-empty.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "AZ_nosuchissue",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("AZ_nosuchissue", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("searchIssues", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ABlankIssueKeyIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "   ",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("issueKey is required", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getRule
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetRuleReturnsTheThreeSectionsWorthReadingInTheOrderTheyAreRead()
+    {
+        using var handler = Stub("rules-search-with-sections.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "csharpsquid:S2259",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/rules/search", Path(handler));
+        Assert.Equal("csharpsquid:S2259", Query(handler, "rule_key"));
+        Assert.Equal("quartznet", Query(handler, "organization"));
+        Assert.Equal("1", Query(handler, "ps"));
+        Assert.Contains("descriptionSections", Query(handler, "f")!, StringComparison.Ordinal);
+
+        Assert.Equal(
+            ["introduction", "root_cause", "how_to_fix"],
+            result.Sections.Select(section => section.Key));
+
+        // The HTML is gone and the code sample is fenced.
+        Assert.DoesNotContain("<pre", result.Sections[1].Content!, StringComparison.Ordinal);
+        Assert.Contains("```", result.Sections[1].Content!, StringComparison.Ordinal);
+        Assert.Equal("C#", result.Sections[2].Context);
+        Assert.False(result.Truncated);
+        Assert.Null(result.Note);
+    }
+
+    [Fact]
+    public async Task GetRuleReturnsOnlyTheSectionsThatWereAskedFor()
+    {
+        using var handler = Stub("rules-search-with-sections.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "csharpsquid:S2259",
+            sections: ["resources"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var section = Assert.Single(result.Sections);
+
+        Assert.Equal("resources", section.Key);
+        Assert.Contains("- CWE-476", section.Content!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The degraded case, captured live and anonymously: name, impacts and clean-code attribute
+    /// arrive, descriptions do not. Half a rule is still worth having, so it is a note rather than
+    /// an exception.
+    /// </summary>
+    [Fact]
+    public async Task ARuleWithNoDescriptionSectionsDegradesWithANoteRatherThanThrowing()
+    {
+        using var handler = Stub("rules-search-rule-key.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "csharpsquid:S2259",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Sections);
+        Assert.Equal("Null pointers should not be dereferenced", result.Name);
+        Assert.Equal("RELIABILITY", Assert.Single(result.Impacts).SoftwareQuality);
+        Assert.NotNull(result.Note);
+        Assert.Contains("SONARQUBE_TOKEN", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>A rule old enough to predate sections carries one HTML blob; it becomes root_cause.</summary>
+    [Fact]
+    public async Task ALegacyHtmlDescriptionIsReturnedAsASyntheticRootCauseSection()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.RuleWithHtmlDescOnly);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "csharpsquid:S1118",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var section = Assert.Single(result.Sections);
+
+        Assert.Equal("root_cause", section.Key);
+        Assert.Contains("- Add a private constructor.", section.Content!, StringComparison.Ordinal);
+        Assert.Null(result.Note);
+    }
+
+    [Fact]
+    public async Task ARuleKeyWithoutARepositoryIsRefusedWithTheShapeThatWorks()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetRuleAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "S2259",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("repository:rule", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ARuleKeyThatMatchesNothingNamesTheKeyAndTheOrganization()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.NoRules);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetRuleAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "csharpsquid:S9999",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("csharpsquid:S9999", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("quartznet", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnUnknownRuleSectionIsRefusedWithTheFiveThatExist()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetRuleAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "csharpsquid:S2259",
+                sections: ["summary"],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("assess_the_problem", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // searchHotspots and getHotspot
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// C12. <c>files</c> takes the project-relative path; a component key matches nothing at all,
+    /// and does it silently — an empty result rather than an error.
+    /// </summary>
+    [Theory]
+    [InlineData("src/Quartz.Examples.AspNetCore/appsettings.json")]
+    [InlineData("quartznet_quartznet:src/Quartz.Examples.AspNetCore/appsettings.json")]
+    [InlineData("src\\Quartz.Examples.AspNetCore\\appsettings.json")]
+    public async Task SearchHotspotsFiltersByPathWhateverSpellingTheCallerUsed(string component)
+    {
+        using var handler = Stub("hotspots-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchHotspotsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            component: component,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/hotspots/search", Path(handler));
+        Assert.Equal("src/Quartz.Examples.AspNetCore/appsettings.json", Query(handler, "files"));
+        Assert.Equal(Project, Query(handler, "projectKey"));
+    }
+
+    [Fact]
+    public async Task WithNoComponentSearchHotspotsSendsNoFileFilterAtAll()
+    {
+        using var handler = Stub("hotspots-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchHotspotsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("files", Names(handler));
+    }
+
+    /// <summary>The project key is not a file filter, so it must not be sent as one.</summary>
+    [Fact]
+    public async Task TheProjectItselfIsNeverSentAsAFileFilter()
+    {
+        using var handler = Stub("hotspots-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchHotspotsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            component: Project,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("files", Names(handler));
+    }
+
+    [Fact]
+    public async Task HotspotSearchReportsTheAssigneeAsTheUuidItActuallyIs()
+    {
+        using var handler = Stub("hotspots-search-page.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SearchHotspotsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            status: "TO_REVIEW",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("TO_REVIEW", Query(handler, "status"));
+
+        var hotspot = result.Hotspots[0];
+
+        Assert.Equal(HotspotKey, hotspot.Key);
+        Assert.Equal("src/Quartz.Examples.AspNetCore/appsettings.json", hotspot.File);
+        Assert.Equal("AYgE5F7pEoXHSow6lKjD", hotspot.AssigneeId);
+        Assert.Equal("HIGH", hotspot.VulnerabilityProbability);
+        Assert.Equal(28, result.TotalCount);
+        Assert.True(result.HasMore);
+    }
+
+    [Fact]
+    public async Task TheHotspotSearchFilterRefusesAResolutionSonarQubeCloudDoesNotHave()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SearchHotspotsAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                resolution: "ACKNOWLEDGED",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("FIXED or SAFE", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetHotspotUsesTheParameterNameTheEndpointActuallyTakes()
+    {
+        using var handler = Stub("hotspots-show.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetHotspotAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            HotspotKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/hotspots/show", Path(handler));
+        Assert.Equal(["hotspot"], Names(handler));
+
+        // A login here, unlike the UUID the search endpoint reports under the same name (C7).
+        Assert.Equal("lahma@github", result.Assignee);
+        Assert.Equal("src/Quartz.Examples.AspNetCore/appsettings.json", result.File);
+        Assert.False(result.CanChangeStatus);
+
+        Assert.NotNull(result.Rule);
+        Assert.Contains("Hard-coding credentials", result.Rule.RiskDescription!, StringComparison.Ordinal);
+        Assert.Contains("```", result.Rule.FixRecommendations!, StringComparison.Ordinal);
+        Assert.Null(result.Rule.VulnerabilityDescription);
+    }
+
+    [Fact]
+    public async Task ABlankHotspotKeyIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetHotspotAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                string.Empty,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("hotspotKey is required", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getComponentMeasures and listComponentMeasures
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetComponentMeasuresAsksForPeriodsAndDiffsWhatCameBack()
+    {
+        using var handler = Stub("measures-component.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            NclocAndRating,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/measures/component", Path(handler));
+        Assert.Equal("ncloc,sqale_rating,new_coverage", Query(handler, "metricKeys"));
+
+        // periods, plural — the singular spelling is a 400.
+        Assert.Equal("periods", Query(handler, "additionalFields"));
+
+        Assert.Equal(Project, result.Component);
+        Assert.Equal("119857", result.Measures[0].Value);
+
+        // "1.0" means A, which is the single most confusing value in the whole API.
+        Assert.Equal("A", result.Measures[1].Value);
+
+        // Absent is not zero: the metric was requested and came back with nothing.
+        Assert.Equal(["new_coverage"], result.MissingMetrics);
+    }
+
+    [Fact]
+    public async Task ANewCodeValueIsReportedAsOneAndNeverAsTheOverallValue()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.MeasuresWithRatingAndPeriods);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["sqale_rating", "new_coverage", "new_reliability_rating"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("C", result.Measures[0].Value);
+        Assert.Null(result.Measures[0].NewCodeValue);
+
+        Assert.Null(result.Measures[1].Value);
+        Assert.Equal("82.5", result.Measures[1].NewCodeValue);
+
+        // A rating in the new-code period is still a letter.
+        Assert.Equal("E", result.Measures[2].NewCodeValue);
+        Assert.Empty(result.MissingMetrics);
+    }
+
+    [Fact]
+    public async Task GetComponentMeasuresAcceptsTwentyFiveMetricsAndRefusesTwentySix()
+    {
+        using var handler = Stub("measures-component.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await MeasureReadTools.GetComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            MetricKeys(25),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(handler.Requests);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetComponentMeasuresAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                MetricKeys(26),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("26 entries", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("at most 25", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("metricKeys", exception.Message, StringComparison.Ordinal);
+
+        // The refusal cost nothing: still the one successful request.
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task NoMetricKeysAtAllPointsAtListMetrics()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetComponentMeasuresAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                [],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("metricKeys is required", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("listMetrics", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>Fifteen is the API's own <c>maxValuesAllowed</c> on this action, not a house rule.</summary>
+    [Fact]
+    public async Task ListComponentMeasuresAcceptsFifteenMetricsAndRefusesSixteen()
+    {
+        using var handler = Stub("measures-component-tree.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            MetricKeys(15),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(handler.Requests);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.ListComponentMeasuresAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                MetricKeys(16),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("16 entries", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("at most 15", exception.Message, StringComparison.Ordinal);
+        Assert.Single(handler.Requests);
+    }
+
+    /// <summary>
+    /// Sorting by a metric is three parameters that only mean anything together — the third is what
+    /// keeps components with no value for the metric from sorting to the top of a "worst files" list.
+    /// </summary>
+    [Fact]
+    public async Task SortingByAMetricSendsAllThreeParametersThatMakeItWork()
+    {
+        using var handler = Stub("measures-component-tree.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            Ncloc,
+            sortByMetric: "coverage",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/measures/component_tree", Path(handler));
+        Assert.Equal("metric", Query(handler, "s"));
+        Assert.Equal("coverage", Query(handler, "metricSort"));
+        Assert.Equal("withMeasuresOnly", Query(handler, "metricSortFilter"));
+        Assert.Equal("false", Query(handler, "asc"));
+
+        Assert.Equal(2, result.Components.Count);
+        Assert.Equal("10968", result.Components[0].Measures[0].Value);
+        Assert.Equal(796, result.TotalCount);
+        Assert.True(result.HasMore);
+    }
+
+    [Fact]
+    public async Task WithoutASortMetricNoneOfTheSortParametersAreSent()
+    {
+        using var handler = Stub("measures-component-tree.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            Ncloc,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("s", Names(handler));
+        Assert.DoesNotContain("metricSort", Names(handler));
+        Assert.DoesNotContain("metricSortFilter", Names(handler));
+    }
+
+    [Fact]
+    public async Task TreeMeasuresReportTheMetricsNoComponentOnThePageHad()
+    {
+        using var handler = Stub("measures-component-tree.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["ncloc", "coverage"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["coverage"], result.MissingMetrics);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getMeasuresHistory
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task MeasureHistoryUsesTheParameterNameThisEndpointActuallyHas()
+    {
+        using var handler = Stub("measures-search-history.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetMeasuresHistoryAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["ncloc", "coverage"],
+            from: "2024-08-01",
+            to: "2024-11-01",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/measures/search_history", Path(handler));
+        Assert.Equal("ncloc,coverage", Query(handler, "metrics"));
+        Assert.DoesNotContain("metricKeys", Names(handler));
+        Assert.Equal("2024-08-01", Query(handler, "from"));
+        Assert.Equal("2024-11-01", Query(handler, "to"));
+
+        Assert.Equal(2, result.Metrics.Count);
+        Assert.Equal("67668", result.Metrics[0].History[0].Value);
+
+        // A point with no value is a gap in the series, not a zero.
+        Assert.Null(result.Metrics[1].History[0].Value);
+
+        Assert.Equal(29, result.TotalCount);
+        Assert.NotNull(result.Note);
+        Assert.Contains("number of analyses", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The message has to name the parameter the caller actually has. On this one tool it is
+    /// <c>metrics</c>; naming <c>metricKeys</c> would send them looking for an argument that does
+    /// not exist.
+    /// </summary>
+    [Fact]
+    public async Task MeasureHistoryComplainsAboutMetricsRatherThanMetricKeys()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetMeasuresHistoryAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                [],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("metrics is required", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("metricKeys", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // listMetrics
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// C6: <c>f</c> is never sent. <c>type</c> is not one of its accepted values, and asking for it
+    /// is a 400 — while omitting <c>f</c> returns every field including <c>type</c> and
+    /// <c>direction</c>, which is what this tool reads.
+    /// </summary>
+    [Fact]
+    public async Task ListMetricsFetchesTheWholeCatalogueInOneCallAndSendsNoFieldSelector()
+    {
+        using var handler = Stub("metrics-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await MeasureReadTools.ListMetricsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/metrics/search", Path(handler));
+        Assert.Equal(["ps"], Names(handler));
+        Assert.Equal("500", Query(handler, "ps"));
+    }
+
+    [Fact]
+    public async Task DataMetricsAreLeftOutByDefaultAndTheNoteSaysHowMany()
+    {
+        using var handler = Stub("metrics-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListMetricsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(142, result.Metrics.Count);
+        Assert.Equal(142, result.TotalCount);
+        Assert.DoesNotContain(result.Metrics, metric => metric.Key == "ncloc_data");
+
+        Assert.NotNull(result.Note);
+        Assert.Contains("13 metric(s)", result.Note, StringComparison.Ordinal);
+        Assert.Contains("includeDataMetrics=true", result.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IncludeDataMetricsKeepsTheBlobsAndDropsTheNote()
+    {
+        using var handler = Stub("metrics-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListMetricsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            includeDataMetrics: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(155, result.Metrics.Count);
+        Assert.Contains(result.Metrics, metric => metric.Key == "ncloc_data");
+        Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// The filter is a substring over key, name <em>and</em> description. The phrase below appears
+    /// in no key and no name, so matching on it is proof that descriptions are searched — which is
+    /// the half of the filter a caller cannot get from the API's own (non-existent) <c>q</c>.
+    /// </summary>
+    /// <remarks>
+    /// Worth knowing: the catalogue spells this family "Duplicated", never "Duplication" (outside
+    /// the DATA-typed <c>duplications_data</c>), and the <c>domain</c> is not searched — so the
+    /// query "duplication" finds nothing once the DATA metrics are filtered out. The <c>domain</c>
+    /// parameter is the way to ask that question, and <c>listMetrics</c> exposes it.
+    /// </remarks>
+    [Fact]
+    public async Task TheMetricQueryMatchesDescriptionsAsWellAsKeys()
+    {
+        using var handler = Stub("metrics-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var options = ToolTestHost.CreateOptions();
+
+        var described = await MeasureReadTools.ListMetricsAsync(
+            client,
+            options,
+            query: "balanced by statements",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(described.Metrics);
+        Assert.Contains(described.Metrics, metric => metric.Key == "duplicated_lines_density");
+        Assert.All(described.Metrics, metric => Assert.NotEqual("ncloc", metric.Key));
+
+        using var second = Stub("metrics-search.json");
+        using var secondClient = ToolTestHost.CreateClient(second);
+
+        var byKey = await MeasureReadTools.ListMetricsAsync(
+            secondClient,
+            options,
+            query: "duplicated",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(7, byKey.Metrics.Count);
+        Assert.All(byKey.Metrics, metric => Assert.Equal("Duplications", metric.Domain));
+    }
+
+    [Fact]
+    public async Task TheDomainFilterIsExactAndCaseInsensitive()
+    {
+        using var handler = Stub("metrics-search.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListMetricsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            domain: "coverage",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(result.Metrics);
+        Assert.All(result.Metrics, metric => Assert.Equal("Coverage", metric.Domain));
+        Assert.Contains(result.Metrics, metric => metric.Key == "coverage" && metric.HigherIsBetter == true);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getFileCoverage
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FileCoverageAlwaysNamesBothEndsOfTheRangeItReads()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.SourceLinesWithCoverage);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "src/Quartz/Core/QuartzScheduler.cs",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/sources/lines", Path(handler));
+        Assert.Equal(FileKey, Query(handler, "key"));
+
+        // Both ends resolved even though the caller named neither: the alternative is asking for
+        // every line of a file whose length is unknown.
+        Assert.Equal("1", Query(handler, "from"));
+        Assert.Equal("2000", Query(handler, "to"));
+
+        Assert.Equal(1, result.From);
+        Assert.Equal(2000, result.To);
+        Assert.Equal([3], result.UncoveredLines);
+        Assert.Equal([2], result.PartiallyCoveredLines);
+        Assert.Equal([1], result.NewLines);
+        Assert.Equal([3], result.DuplicatedLines);
+    }
+
+    [Fact]
+    public async Task FileCoverageReturnsOnlyTheLinesWorthWritingATestFor()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.SourceLinesWithCoverage);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            FileKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal([2, 3], result.Lines.Select(line => line.Line));
+        Assert.NotNull(result.Note);
+        Assert.Contains("onlyUncovered=false", result.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OnlyUncoveredFalseReturnsEveryLineInTheRange()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.SourceLinesWithCoverage);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            FileKey,
+            onlyUncovered: false,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 2, 3, 4, 5], result.Lines.Select(line => line.Line));
+        Assert.Contains("every line in the range", result.Note!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The source text is syntax-highlighted HTML and the agent already has the file on disk, so it
+    /// is dropped — asserted on the serialised result, because "no code" is a claim about the JSON
+    /// the client receives rather than about the record.
+    /// </summary>
+    [Fact]
+    public async Task FileCoverageNeverReturnsTheSourceText()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(SonarFixtures.Read("sources-lines.json"));
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            FileKey,
+            from: 940,
+            to: 945,
+            onlyUncovered: false,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var json = JsonSerializer.Serialize(result, SonarToolJsonContext.Default.FileCoverageResult);
+
+        // "code" as a property name, not as a substring: the deep link legitimately points at
+        // /code?id=… , which is the browser page for the file.
+        Assert.DoesNotContain("\"code\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("<span", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("scmRevision", json, StringComparison.Ordinal);
+        Assert.Equal(6, result.Lines.Count);
+    }
+
+    /// <summary>
+    /// An empty <c>uncoveredLines</c> means "fully covered" only when coverage was measured at all,
+    /// so the unmeasured case says so rather than letting the absence read as success.
+    /// </summary>
+    [Fact]
+    public async Task AFileWithNoCoverageDataSaysSoInsteadOfLookingFullyCovered()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.SourceLinesWithoutCoverage);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            FileKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.UncoveredLines);
+        Assert.Contains("coverage was never measured", result.Note!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ARangeWiderThanTheServerCapIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetFileCoverageAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                FileKey,
+                from: 1,
+                to: 2001,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("2001 lines", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("SONARQUBE_MCP_MAX_SOURCE_LINES", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task TheLineCapFollowsTheConfiguredValue()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.SourceLinesWithCoverage);
+
+        using var client = ToolTestHost.CreateClient(handler);
+        var options = ToolTestHost.CreateOptions(maxSourceLines: 10);
+
+        _ = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            options,
+            FileKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("10", Query(handler, "to"));
+
+        _ = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetFileCoverageAsync(
+                client,
+                options,
+                FileKey,
+                from: 1,
+                to: 11,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(0, null, "from must be 1 or greater")]
+    [InlineData(-4, null, "from must be 1 or greater")]
+    [InlineData(50, 40, "to must be greater than or equal to from")]
+    public async Task AnImpossibleRangeIsRefusedWithTheReason(int from, int? to, string expected)
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            MeasureReadTools.GetFileCoverageAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                FileKey,
+                from: from,
+                to: to,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // transitionIssue
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TransitionIssuePostsAFormBodyAndCostsOneRequestWhenTheAnswerCarriesTransitions()
+    {
+        using var handler = Stub("issues-do_transition.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.TransitionIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "accept",
+            comment: "Intentional here.",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(handler.Requests);
+
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("/api/issues/do_transition", RequestUrl.Path(request.Uri));
+        Assert.Equal("application/x-www-form-urlencoded", request.Headers["Content-Type"]);
+        Assert.Equal($"issue={IssueKey}&transition=accept&comment=Intentional+here.", request.Body);
+
+        Assert.Equal("ACCEPTED", result.IssueStatus);
+        Assert.Equal("WONTFIX", result.Resolution);
+        Assert.Equal(["reopen"], result.AvailableTransitions);
+        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", result.File);
+    }
+
+    /// <summary>
+    /// When the operation response does not carry the new transitions, one extra read is worth it:
+    /// without them the caller can only discover what it may do next by trying and failing.
+    /// </summary>
+    [Fact]
+    public async Task ATransitionResponseWithoutTransitionsCostsOneExtraRead()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.TransitionWithoutTransitions);
+        handler.EnqueueJson(ToolPayloads.TransitionReread);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.TransitionIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "resolve",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal("/api/issues/search", RequestUrl.Path(handler.Requests[1].Uri));
+        Assert.Equal("transitions", RequestUrl.QueryValue(handler.Requests[1].Uri, "additionalFields"));
+        Assert.Equal(["reopen"], result.AvailableTransitions);
+    }
+
+    [Fact]
+    public async Task AnUnknownTransitionExplainsWhatToCallFirstAndWhatAcceptReplaced()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.TransitionIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                IssueKey,
+                "close",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("accept supersedes wontfix", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("availableTransitions", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("setHotspotStatus", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task TheLegacySpellingOfAcceptIsStillAccepted()
+    {
+        using var handler = Stub("issues-do_transition.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueWriteTools.TransitionIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "WontFix",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal($"issue={IssueKey}&transition=wontfix", Assert.Single(handler.Requests).Body);
+    }
+
+    [Fact]
+    public async Task ATransitionWithNoIssueKeyIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.TransitionIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                " ",
+                "accept",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // assignIssue and addIssueComment
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AssignIssueSendsTheLoginItWasGiven()
+    {
+        using var handler = Stub("issues-assign.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.AssignIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "lahma@github",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(handler.Requests);
+
+        Assert.Equal("/api/issues/assign", RequestUrl.Path(request.Uri));
+        Assert.Equal($"issue={IssueKey}&assignee=lahma%40github", request.Body);
+        Assert.Equal("lahma@github", result.Assignee);
+        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", result.File);
+    }
+
+    /// <summary>
+    /// Omitting <c>assignee</c> means "unassign", which is <c>assignee=</c> on the wire — omitting
+    /// the parameter entirely would leave the current assignee in place.
+    /// </summary>
+    [Fact]
+    public async Task OmittingTheAssigneeUnassignsRatherThanLeavingItAlone()
+    {
+        using var handler = Stub("issues-assign.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueWriteTools.AssignIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal($"issue={IssueKey}&assignee=", Assert.Single(handler.Requests).Body);
+    }
+
+    [Fact]
+    public async Task AddIssueCommentPostsTheTextAndReportsTheCommentThatWasJustCreated()
+    {
+        using var handler = Stub("issues-add_comment.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.AddIssueCommentAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "Fixed by the naming pass.",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(handler.Requests);
+
+        Assert.Equal("/api/issues/add_comment", RequestUrl.Path(request.Uri));
+        Assert.Equal($"issue={IssueKey}&text=Fixed+by+the+naming+pass.", request.Body);
+
+        // The newest by timestamp, not the last in the array: the response order is not contractual.
+        Assert.Equal("AZ_0000000000000000002", result.CommentKey);
+        Assert.Equal("Fixed by the naming pass.", result.Text);
+    }
+
+    [Fact]
+    public async Task AnEmptyCommentIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.AddIssueCommentAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                IssueKey,
+                "   ",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("text is required", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // setHotspotStatus
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The endpoint answers 204 with no body, so the resulting state has to be read back — which is
+    /// exactly two requests, and the second is what the caller is actually told about.
+    /// </summary>
+    [Fact]
+    public async Task SettingAHotspotStatusIsAPostFollowedByAReadBack()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueNoBody(HttpStatusCode.NoContent);
+        handler.EnqueueJson(ToolPayloads.HotspotShowWithComment);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.SetHotspotStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            HotspotKey,
+            "reviewed",
+            "safe",
+            comment: "Placeholder value.",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count);
+
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        Assert.Equal("/api/hotspots/change_status", RequestUrl.Path(handler.Requests[0].Uri));
+        Assert.Equal(
+            $"hotspot={HotspotKey}&status=REVIEWED&resolution=SAFE&comment=Placeholder+value.",
+            handler.Requests[0].Body);
+
+        Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+        Assert.Equal("/api/hotspots/show", RequestUrl.Path(handler.Requests[1].Uri));
+
+        // What SonarQube stored, not what was asked for.
+        Assert.Equal("REVIEWED", result.Status);
+        Assert.Equal("SAFE", result.Resolution);
+        Assert.Equal("src/Quartz.Examples.AspNetCore/appsettings.json", result.File);
+    }
+
+    [Fact]
+    public async Task ReviewedWithoutAResolutionIsRefusedWithBothOptionsExplained()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.SetHotspotStatusAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                HotspotKey,
+                "REVIEWED",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("status=REVIEWED needs a resolution", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("FIXED when the risky code was changed", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ToReviewWithAResolutionIsRefusedAsContradictory()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.SetHotspotStatusAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                HotspotKey,
+                "TO_REVIEW",
+                "SAFE",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("cannot carry a resolution", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>C2: documented for SonarQube Server, refused by Cloud — so it is refused here, with the reason.</summary>
+    [Fact]
+    public async Task AcknowledgedIsRefusedWithTheCloudSpecificExplanation()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.SetHotspotStatusAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                HotspotKey,
+                "REVIEWED",
+                "ACKNOWLEDGED",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("ACKNOWLEDGED is documented for SonarQube Server", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("use SAFE", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task AnUnknownHotspotStatusIsRefusedWithTheTwoThatExist()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.SetHotspotStatusAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                HotspotKey,
+                "CLOSED",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("TO_REVIEW or REVIEWED", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>A stub primed with one golden fixture.</summary>
+    private static StubHttpMessageHandler Stub(string fixture)
+    {
+        var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(SonarFixtures.Read(fixture));
+        return handler;
+    }
+
+    private static string Path(StubHttpMessageHandler handler, int index = 0) =>
+        RequestUrl.Path(handler.Requests[index].Uri);
+
+    private static string? Query(StubHttpMessageHandler handler, string name, int index = 0) =>
+        RequestUrl.QueryValue(handler.Requests[index].Uri, name);
+
+    private static List<string> Names(StubHttpMessageHandler handler, int index = 0) =>
+        RequestUrl.QueryNames(handler.Requests[index].Uri);
+
+    /// <summary>A metric list of the requested length, all distinct so nothing is deduplicated away.</summary>
+    private static string[] MetricKeys(int count)
+    {
+        var keys = new string[count];
+
+        for (var index = 0; index < count; index++)
+        {
+            keys[index] = "metric_" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return keys;
+    }
+}

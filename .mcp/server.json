@@ -17,7 +17,38 @@
         "type": "stdio"
       },
       "packageArguments": [],
-      "environmentVariables": []
+      "environmentVariables": [
+        {
+          "name": "SONARQUBE_TOKEN",
+          "description": "SonarQube Cloud user token, sent as a Bearer credential. Create one at https://sonarcloud.io/account/security and pick the User Token type - a project analysis token is not accepted by these endpoints. Without it the server still starts and reads public projects anonymously, but nothing private is reachable and no write tool works.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "SONARQUBE_ORG",
+          "description": "Organization key - the last segment of https://sonarcloud.io/organizations/{key}. Only listProjects and getRule require it, and a public organization answers both anonymously, so it is optional; set it and every project in that organization becomes discoverable.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SONARQUBE_URL",
+          "description": "Base URL of the SonarQube Cloud instance. Defaults to https://sonarcloud.io; the only other accepted host is https://sonarqube.us. SonarQube Server is out of scope and any other value is ignored.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SONARQUBE_MCP_DEFAULT_PROJECT",
+          "description": "Project key used when a tool call omits projectKey. It is the id in a sonarcloud.io project URL, not the repository name. Setting it is worth it when this server is configured per checkout.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SONARQUBE_MCP_READ_ONLY",
+          "description": "Set to 1 to register only the fifteen read tools. The four write tools - transitionIssue, assignIssue, addIssueComment and setHotspotStatus - are then absent from tools/list rather than refused when called.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
     }
   ]
 }

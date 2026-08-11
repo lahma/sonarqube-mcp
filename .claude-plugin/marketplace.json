@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "sonarqube-mcp",
+  "description": "The sonarqube-mcp server and its code-quality workflow skill, published from the project's own repository.",
+  "owner": {
+    "name": "lahma",
+    "url": "https://github.com/lahma"
+  },
+  "plugins": [
+    {
+      "name": "sonarqube-mcp",
+      "source": "./",
+      "category": "code-quality",
+      "tags": ["sonarqube", "sonarcloud", "code-quality", "static-analysis", "mcp"]
+    }
+  ]
+}

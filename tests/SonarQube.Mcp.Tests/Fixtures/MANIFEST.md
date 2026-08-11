@@ -58,9 +58,12 @@ live captures so nothing about them is shaped differently from a genuine respons
 **`hotspots/change_status` has no fixture.** It answers `204` with no body, so there is nothing to
 store; a test that needs it enqueues a bodiless 204, which is precisely what the wire carries.
 
-## Corrections to `docs/DESIGN.md` found while capturing
+## Corrections to the implementation design found while capturing
 
-- **§1c tool 14 (`listMetrics`) sends an invalid `f`.** The design specifies
+These were found against the pre-implementation design document (since folded into `AGENTS.md`,
+whose *API gotchas* section records them as C6–C11).
+
+- **`listMetrics` was designed to send an invalid `f`.** The design specified
   `api/metrics/search?ps=500&f=name,description,domain,type,hidden`. `type` is **not** an accepted
   value: the API's own metadata lists `f` as
   `name|description|domain|direction|qualitative|hidden|decimalScale`, and the request returns
