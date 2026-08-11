@@ -43,6 +43,12 @@ One more wire detail with no design row: `ComponentDto` needs **both `id` and `u
 same value under two names — the issues and components endpoints send `uuid`, the measures
 endpoints send `id`.
 
+### 0c. Phase C correction — re-probed 2026-08-11 while wiring the tools
+
+| # | This document said | Live reality | Consequence |
+|---|---|---|---|
+| C12 | `searchHotspots`'s `component` becomes `files`, and every other endpoint's component argument is a **component key** (§1c #9) | `hotspots/search?files=src/App/appsettings.json` matches **2** hotspots; `files=proj:src/App/appsettings.json` matches **0**. The `files` parameter takes the **project-relative path**, not the key. | `ToolDefaults.ResolveComponentPath(component, projectKey)` converts either spelling to the path form, and `searchHotspots` is the one tool that sends a path where the others send a key. The failure mode is silent — an empty result, not an error — which is why the conversion is in the validator rather than left to the caller. |
+
 ---
 
 ## 1. The definitive tool table

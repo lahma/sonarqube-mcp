@@ -1,19 +1,14 @@
+using SonarQube.Mcp.Configuration;
+
 namespace SonarQube.Mcp.Cli;
 
 /// <summary>
-/// Hand-rolled argv dispatch (D15). No <c>System.CommandLine</c>: the surface is four verbs, and
-/// the package budget is a hard constraint.
+/// Hand-rolled argv dispatch. No <c>System.CommandLine</c>: the surface is four verbs, and the
+/// package budget is a hard constraint.
 /// </summary>
 /// <remarks>
-/// This namespace is the only place in the server that may write to stdout — in server mode
-/// stdout <em>is</em> the MCP protocol channel.
-/// <para>
-/// TODO(PhaseC): <c>status</c> is a placeholder here. Its real shape is the credential probe in
-/// its own <c>Cli/StatusCommand.cs</c>: version, resolved base URL, whether SONARQUBE_TOKEN is set
-/// (never any part of its value), organization, default project, read-only mode, then
-/// <c>authentication/validate</c> — but only when a token is actually set, because that endpoint
-/// answers <c>{"valid":true}</c> to an anonymous request. It always exits 0.
-/// </para>
+/// This namespace is the only place in the server that may write to stdout — in server mode stdout
+/// <em>is</em> the MCP protocol channel.
 /// </remarks>
 internal static class CliDispatcher
 {
@@ -38,10 +33,21 @@ internal static class CliDispatcher
            -h, --help                     Show this help text.
            -v, --version                  Show the version.
 
-         Configuration is environment variables only. The ones that identify you and your data:
-           SONARQUBE_TOKEN                User token, sent as a Bearer credential.
-           SONARQUBE_ORG                  Organization key.
-           SONARQUBE_URL                  Base URL (default https://sonarcloud.io).
+         Configuration is environment variables only.
+           SONARQUBE_TOKEN                User token, sent as a Bearer credential. Create one under
+                                          Account > Security; a project analysis token does not work.
+           SONARQUBE_ORG                  Organization key - the last segment of
+                                          https://sonarcloud.io/organizations/<key>.
+           SONARQUBE_URL                  Base URL (default https://sonarcloud.io). Only SonarQube
+                                          Cloud hosts are accepted.
+           SONARQUBE_MCP_DEFAULT_PROJECT  Makes the projectKey tool parameter optional.
+           SONARQUBE_MCP_READ_ONLY        1 to register only the fifteen read tools.
+           SONARQUBE_MCP_LOG_LEVEL        Trace|Debug|Information|Warning|Error|Critical|None
+                                          (default Information). Logs go to stderr.
+           SONARQUBE_MCP_MAX_PAGE_SIZE    Ceiling on a tool's pageSize, 1-500 (default 100).
+           SONARQUBE_MCP_DEFAULT_PAGE_SIZE  pageSize when a tool call omits it (default 50).
+           SONARQUBE_MCP_MAX_SOURCE_LINES   Cap on getFileCoverage's line span (default 2000).
+           SONARQUBE_MCP_HTTP_TIMEOUT_SECONDS  Whole-request timeout, 5-600 (default 100).
 
          Run `{ServerVersion.Name} status` to see which of these are in effect; the README documents
          the full set.
@@ -70,14 +76,10 @@ internal static class CliDispatcher
                 Console.Out.WriteLine(UsageText);
                 return ExitSuccess;
 
+            // Reads the environment itself, exactly as the server does, so that what `status`
+            // reports is what `serve` would use.
             case "status":
-                // TODO(PhaseC): replace with StatusCommand.RunAsync(SonarQubeMcpOptions.FromEnvironment()).
-                // "nothing is configured" is a fact status reports, not a failure of it, so the real
-                // command exits 0 in every credential state - as this placeholder already does.
-                Console.Out.WriteLine($"{ServerVersion.Name} {ServerVersion.Value}");
-                Console.Out.WriteLine("status: not implemented yet - the configuration surface and the API client " +
-                                      "landed in Phase B; the credential probe and the reporting come in Phase C.");
-                return ExitSuccess;
+                return await StatusCommand.RunAsync(SonarQubeMcpOptions.FromEnvironment()).ConfigureAwait(false);
 
             default:
                 Console.Error.WriteLine($"{ServerVersion.Name}: unknown argument '{command}'.");

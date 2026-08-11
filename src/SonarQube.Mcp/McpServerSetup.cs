@@ -1,14 +1,18 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 using SonarQube.Mcp.Authentication;
 using SonarQube.Mcp.Configuration;
 using SonarQube.Mcp.Http;
+using SonarQube.Mcp.Tools;
+using SonarQube.Mcp.Tools.Models;
 
 namespace SonarQube.Mcp;
 
@@ -18,12 +22,6 @@ namespace SonarQube.Mcp;
 /// <remarks>
 /// Nothing in this file — or anything it starts — may write to stdout: stdout is the JSON-RPC
 /// channel and a stray write corrupts the protocol stream. Logging goes to stderr.
-/// <para>
-/// TODO(PhaseC): the graph below builds the options and the API client, but no tool is registered
-/// yet. Phase C adds the tool-facing serializer options, the server instructions and one
-/// <c>WithTools&lt;T&gt;(jsonOptions)</c> call per tool class, with read-only mode expressed as the
-/// <em>absence</em> of the write-tool call.
-/// </para>
 /// </remarks>
 internal static class McpServerSetup
 {
@@ -73,7 +71,10 @@ internal static class McpServerSetup
             sp.GetRequiredService<StaticTokenCredential>(),
             sp.GetRequiredService<ILoggerFactory>()));
 
-        services
+        var jsonOptions = CreateToolSerializerOptions();
+        var toolTypes = ToolTypesFor(options);
+
+        var builder = services
             .AddMcpServer(serverOptions =>
             {
                 serverOptions.ServerInfo = new Implementation
@@ -82,14 +83,27 @@ internal static class McpServerSetup
                     Version = ServerVersion.Value,
                 };
 
-                // A server with no tool registered at all advertises no `tools` capability and has
-                // nothing to answer `tools/list` with, which would make the SmokeTest handshake fail
-                // for a reason that has nothing to do with the transport. An empty collection is the
-                // honest answer - "tools are supported, there are none yet" - and `??=` means the
-                // line stays correct once Phase C's WithTools<T> calls fill the collection in.
-                serverOptions.ToolCollection ??= new McpServerPrimitiveCollection<McpServerTool>();
+                // Sent to the client at initialize: the conventions no single tool description can
+                // carry (project keys, branch/pullRequest exclusivity, absent-is-not-zero, ratings).
+                serverOptions.ServerInstructions = ServerInstructions.Text;
             })
             .WithStdioServerTransport();
+
+        // One WithTools<T>(jsonOptions) per tool class - never WithToolsFromAssembly, which is not
+        // AOT-safe (IL2026). These also populate the tool collection, which is what makes the server
+        // advertise the `tools` capability and answer `tools/list`; the Phase A placeholder
+        // collection is therefore gone, and read-only mode still registers three classes.
+        builder.WithTools<ProjectReadTools>(jsonOptions);
+        builder.WithTools<IssueReadTools>(jsonOptions);
+        builder.WithTools<MeasureReadTools>(jsonOptions);
+
+        // Read-only mode is the *absence* of this registration, not a check inside the tools: the
+        // four write tools do not appear in tools/list at all, so a model never proposes a call the
+        // server would refuse. ToolTypesFor is the single source of truth, shared with the tests.
+        if (toolTypes.Contains(typeof(IssueWriteTools)))
+        {
+            builder.WithTools<IssueWriteTools>(jsonOptions);
+        }
 
         await using var provider = services.BuildServiceProvider();
 
@@ -98,6 +112,11 @@ internal static class McpServerSetup
         // say so - and it must be a log line rather than a startup failure, because stdout is the
         // protocol channel and a dead server has no way to explain itself.
         var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+
+        // The error funnel's only two dependencies. Resolved here rather than passed into every tool
+        // method, so that no tool signature carries a parameter the schema then has to exclude.
+        ToolErrors.UseLoggerFactory(loggerFactory);
+        ToolErrors.UseOptions(options);
 
         if (options.RejectedBaseUrl is { } rejected)
         {
@@ -123,6 +142,53 @@ internal static class McpServerSetup
         }
 
         return Cli.CliDispatcher.ExitSuccess;
+    }
+
+    /// <summary>
+    /// The tool classes this configuration registers: all four normally, three when
+    /// <c>SONARQUBE_MCP_READ_ONLY</c> is set.
+    /// </summary>
+    /// <remarks>
+    /// The read-only mode is expressed as a registration this method leaves out, never as a runtime
+    /// check inside a tool. <c>IssueWriteTools</c> is still compiled and still constructible in that
+    /// mode — the flag removes it from the advertised surface, and nothing else.
+    /// <para>
+    /// Factored out so the tests can assert the selection against the production rule rather than a
+    /// copy of it, and so <see cref="RunStdioAsync"/> has exactly one place to consult.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<Type> ToolTypesFor(SonarQubeMcpOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return options.ReadOnly
+            ? [typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools)]
+            : [typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools), typeof(IssueWriteTools)];
+    }
+
+    /// <summary>
+    /// Builds the tool-facing serializer options that every <c>WithTools&lt;T&gt;</c> registration —
+    /// and therefore every generated tool schema — is created with.
+    /// </summary>
+    /// <remarks>
+    /// Ours goes FIRST in the chain so that JIT and AOT resolve identically; the SDK resolver stays
+    /// second for MCP protocol types, which our context returns null for. The chain is cleared first
+    /// because copying the SDK's options copies its chain too, and a duplicate entry ahead of ours
+    /// would decide the tie.
+    /// <para>
+    /// Factored out of <see cref="RunStdioAsync"/> so the schema tests can generate schemas with the
+    /// exact options the server ships, rather than a hand-rolled copy that could drift out of step.
+    /// </para>
+    /// </remarks>
+    internal static JsonSerializerOptions CreateToolSerializerOptions()
+    {
+        var jsonOptions = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
+        jsonOptions.TypeInfoResolverChain.Clear();
+        jsonOptions.TypeInfoResolverChain.Add(SonarToolJsonContext.Default);
+        jsonOptions.TypeInfoResolverChain.Add(McpJsonUtilities.DefaultOptions.TypeInfoResolver!);
+        jsonOptions.MakeReadOnly();
+
+        return jsonOptions;
     }
 
     private static PosixSignalRegistration? RegisterShutdownSignal(PosixSignal signal, CancellationTokenSource shutdown)

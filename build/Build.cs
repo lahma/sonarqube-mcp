@@ -56,12 +56,45 @@ partial class Build : FalloutBuild,
     /// readers.
     /// </summary>
     /// <remarks>
-    /// TODO(PhaseC): fill this in with the nineteen tool names as the tool classes land, and add
-    /// the second SmokeTest leg that runs the same handshake with SONARQUBE_MCP_READ_ONLY=1 and
-    /// asserts the four write tools are absent. Until then <see cref="SmokeTest"/> skips the
-    /// comparison rather than asserting an empty tool list - see the comment there.
+    /// Adding a tool means editing this array, AGENTS.md's tool table, ToolInventoryTests and
+    /// SKILL.md - and a write tool additionally belongs in <see cref="WriteToolNames"/>, which is
+    /// what the read-only leg of <see cref="SmokeTest"/> asserts the absence of.
     /// </remarks>
-    static readonly string[] ExpectedToolNames = [];
+    static readonly string[] ExpectedToolNames =
+    [
+        "listProjects",
+        "listComponents",
+        "listBranches",
+        "listPullRequests",
+        "getQualityGateStatus",
+        "searchIssues",
+        "getIssue",
+        "getRule",
+        "searchHotspots",
+        "getHotspot",
+        "getComponentMeasures",
+        "listComponentMeasures",
+        "getMeasuresHistory",
+        "listMetrics",
+        "getFileCoverage",
+        "transitionIssue",
+        "assignIssue",
+        "addIssueComment",
+        "setHotspotStatus",
+    ];
+
+    /// <summary>
+    /// The tools SONARQUBE_MCP_READ_ONLY removes. They are removed by <em>not registering</em> the
+    /// write tool class, so the proof is that they are absent from tools/list - not that calling one
+    /// fails.
+    /// </summary>
+    static readonly string[] WriteToolNames =
+    [
+        "transitionIssue",
+        "assignIssue",
+        "addIssueComment",
+        "setHotspotStatus",
+    ];
 
     /// <summary>How long SmokeTest waits for both JSON-RPC responses before giving up.</summary>
     static readonly TimeSpan SmokeTestTimeout = TimeSpan.FromSeconds(30);
@@ -217,49 +250,67 @@ partial class Build : FalloutBuild,
         });
 
     Target SmokeTest => _ => _
-        .Description("Runs a real stdio JSON-RPC handshake against the published AOT binary")
+        .Description("Runs a real stdio JSON-RPC handshake against the published AOT binary, in both modes")
         .DependsOn(PublishAot)
         .Executes(() =>
         {
-            var responses = RunHandshake();
+            // Leg 1: a clean environment. No token is configured, which proves the handshake
+            // completes without credentials.
+            var fullNames = Handshake(environment: null, ExpectedToolNames);
 
-            var serverName = responses[InitializeId]
-                .GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString();
-            Assert.True(serverName == ProductName,
-                $"initialize returned serverInfo.name '{serverName}', expected '{ProductName}'");
+            // Leg 2: the same handshake with the read-only flag set. This is the end-to-end proof
+            // that the flag removes the write tools from *registration* rather than rejecting them
+            // at call time - a runtime check would still list them here.
+            var readOnlyExpected = ExpectedToolNames.Except(WriteToolNames, StringComparer.Ordinal).ToArray();
+            var readOnlyNames = Handshake(
+                new Dictionary<string, string> { ["SONARQUBE_MCP_READ_ONLY"] = "1" },
+                readOnlyExpected);
 
-            var toolsElement = responses[ToolsListId].GetProperty("result").GetProperty("tools");
-            Assert.True(toolsElement.ValueKind == JsonValueKind.Array,
-                $"tools/list returned a '{toolsElement.ValueKind}' for 'tools', expected an array");
-
-            var toolNames = toolsElement.EnumerateArray()
-                .Select(x => x.GetProperty("name").GetString())
-                .OrderBy(x => x, StringComparer.Ordinal)
-                .ToArray();
-
-            if (ExpectedToolNames.Length == 0)
+            foreach (var write in WriteToolNames)
             {
-                // TODO(PhaseC): while the tool classes are still being written, comparing against an
-                // empty expectation would assert "this server exposes no tools" - a gate that passes
-                // today and starts failing the moment the first tool lands, for the wrong reason.
-                // Answering initialize and tools/list at all is what is being proved here; the exact
-                // inventory becomes an assertion again as soon as ExpectedToolNames is filled in.
-                Log.Warning("ExpectedToolNames is empty - skipping the tool inventory assertion. " +
-                            "tools/list answered with {Count} tool(s).", toolNames.Length);
-            }
-            else
-            {
-                var expected = ExpectedToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
-
-                Assert.True(toolNames.SequenceEqual(expected, StringComparer.Ordinal),
-                    $"tools/list returned [{string.Join(", ", toolNames)}], expected [{string.Join(", ", expected)}]");
+                Assert.True(!readOnlyNames.Contains(write, StringComparer.Ordinal),
+                    $"tools/list under SONARQUBE_MCP_READ_ONLY=1 still returned the write tool '{write}'");
             }
 
-            Log.Information("Handshake OK: {Server} exposed {Count} tool(s)", serverName, toolNames.Length);
             ReportSummary(_ => _
-                .AddPair("Server", serverName)
-                .AddPair("Tools", toolNames.Length.ToString()));
+                .AddPair("Tools", fullNames.Length.ToString())
+                .AddPair("Read-only tools", readOnlyNames.Length.ToString()));
         });
+
+    /// <summary>
+    /// Drives one handshake and asserts the inventory it answers with, returning the names for any
+    /// further assertion the caller wants to make.
+    /// </summary>
+    string[] Handshake(IReadOnlyDictionary<string, string> environment, string[] expectedToolNames)
+    {
+        var responses = RunHandshake(environment);
+
+        var serverName = responses[InitializeId]
+            .GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString();
+        Assert.True(serverName == ProductName,
+            $"initialize returned serverInfo.name '{serverName}', expected '{ProductName}'");
+
+        var toolsElement = responses[ToolsListId].GetProperty("result").GetProperty("tools");
+        Assert.True(toolsElement.ValueKind == JsonValueKind.Array,
+            $"tools/list returned a '{toolsElement.ValueKind}' for 'tools', expected an array");
+
+        var toolNames = toolsElement.EnumerateArray()
+            .Select(x => x.GetProperty("name").GetString())
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+
+        var expected = expectedToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+
+        Assert.True(toolNames.SequenceEqual(expected, StringComparer.Ordinal),
+            $"tools/list returned [{string.Join(", ", toolNames)}], expected [{string.Join(", ", expected)}]");
+
+        Log.Information("Handshake OK: {Server} exposed {Count} tool(s){Mode}",
+            serverName,
+            toolNames.Length,
+            environment == null ? string.Empty : " with " + string.Join(", ", environment.Select(x => $"{x.Key}={x.Value}")));
+
+        return toolNames;
+    }
 
     const int InitializeId = 1;
     const int ToolsListId = 2;
@@ -274,7 +325,12 @@ partial class Build : FalloutBuild,
     /// stdin first loses responses. Responses are matched by id because the order is not
     /// guaranteed.
     /// </remarks>
-    IReadOnlyDictionary<int, JsonElement> RunHandshake()
+    /// <param name="environment">
+    /// Extra environment variables for the server process, layered on top of this process's own -
+    /// which is how the read-only leg differs from the first one. Null inherits the environment
+    /// unchanged.
+    /// </param>
+    IReadOnlyDictionary<int, JsonElement> RunHandshake(IReadOnlyDictionary<string, string> environment = null)
     {
         // The literal ids must stay in sync with InitializeId / ToolsListId below; the JSON is
         // written out verbatim rather than interpolated so it reads exactly as it goes on the wire.
@@ -297,6 +353,13 @@ partial class Build : FalloutBuild,
                             StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                             StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                         };
+
+        // ProcessStartInfo.Environment starts as a copy of this process's block, so assigning here
+        // overrides one variable and leaves PATH and the rest intact.
+        foreach (var variable in environment ?? new Dictionary<string, string>())
+        {
+            startInfo.Environment[variable.Key] = variable.Value;
+        }
 
         var responses = new Dictionary<int, JsonElement>();
         var diagnostics = new List<string>();
