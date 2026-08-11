@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.lahma/sonarqube-mcp",
+  "description": "SonarQube Cloud over MCP: projects, quality gates, issues, security hotspots, measures, coverage and issue triage.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/lahma/sonarqube-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org",
+      "identifier": "sonarqube-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": []
+    }
+  ]
+}

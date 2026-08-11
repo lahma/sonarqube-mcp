@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- D7: the same reflection-free serializer contract as the server, so a missing
+         [JsonSerializable] fails in `dotnet test` and not only after an AOT publish. -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- Required for IDE0005 under EnforceCodeStyleInBuild; see the server csproj. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/SonarQube.Mcp/SonarQube.Mcp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Golden SonarQube Cloud API response fixtures (.json), embedded so tests are
+         path-independent. The directory arrives with the first captures in Phase B. -->
+    <EmbeddedResource Include="Fixtures/**" />
+  </ItemGroup>
+
+</Project>
