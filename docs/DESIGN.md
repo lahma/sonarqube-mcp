@@ -18,7 +18,30 @@ I re-probed sonarcloud.io (Sonar-Version 13.9, anonymous, org `quartznet`) on 20
 
 Two more confirmed traps worth naming now: `measures/component_tree` declares `metricKeys` **`maxValuesAllowed: 15`**; and timestamps come back as `2026-08-10T20:26:06+0000` — **System.Text.Json's ISO-8601 reader requires `+HH:mm`, so this needs a custom converter** (the one converter in the codebase).
 
-Also confirmed as designed: `additionalFields` on measures is `[metrics, periods]` (plural); new-code values arrive as `"periods":[{"index":1,"value":"2","bestValue":false}]`; `new_coverage` was **silently absent** from a response that requested it; issue `assignee` is a login (`lahma@github`) while hotspot `assignee` is a UUID (`AYgE5F7pEoXHSow6lKjD`); `qualitygates/project_status` on an ungated project is `{"status":"NONE","conditions":[],"periods":[]}`; `sources/lines` `code` is **syntax-highlighted HTML** (`<span class="cd">…`), not plain text.
+Also confirmed as designed: `additionalFields` on measures is `[metrics, periods]` (plural); new-code values arrive as `"periods":[{"index":1,"value":"2","bestValue":false}]`; `new_coverage` was **silently absent** from a response that requested it; issue `assignee` is a login (`lahma@github`) while hotspot `assignee` is a UUID (`AYgE5F7pEoXHSow6lKjD`) — *but see C7*; `qualitygates/project_status` on an ungated project is `{"status":"NONE","conditions":[],"periods":[]}`; `sources/lines` `code` is **syntax-highlighted HTML** (`<span class="cd">…`), not plain text.
+
+### 0b. Phase B corrections — re-probed 2026-08-11 while capturing the golden fixtures
+
+Six further findings, all verified against live sonarcloud.io (org `quartznet`, project
+`quartznet_quartznet`, anonymous) or against the API's own `webservices/list` metadata. Every one is
+already reflected in the Phase B code and in `tests/SonarQube.Mcp.Tests/Fixtures/MANIFEST.md`.
+
+| # | This document said | Live reality | Consequence |
+|---|---|---|---|
+| C6 | `listMetrics` calls `metrics/search?ps=500&f=name,description,domain,type,hidden` (§1c #14, §5) | `f`'s `possibleValues` are `[name, description, domain, direction, qualitative, hidden, decimalScale]`. **`type` is not among them**, and the request answers `400 Value of parameter 'f' (type) must be one of: […]`. | **No `f` is sent at all.** Omitting it returns every field including `type` *and* `direction` (which is what `higherIsBetter` is derived from), so naming a subset buys nothing and costs the whole call. `SonarApiClient.SearchMetricsAsync` sends only `ps`, asserted by `SearchMetricsSendsNoFieldSelector`. |
+| C7 | hotspot `assignee` is a UUID (§0, §10 #15) | True on `hotspots/**search**` (`AYgE5F7pEoXHSow6lKjD`). **On `hotspots/show` the same field is a login** (`lahma@github`), and `show` additionally carries a `users[]` sidecar. | The claim is per-endpoint, not per-entity. `HotspotSummary.assigneeId` (search) stays as designed; `HotspotDetail` must expose the value as a **login**, and the two must not share a mapper. |
+| C8 | `hotspots/show` returns `comments[]` (§5) | The array is spelled **`comment`, singular**. | `HotspotShowResponseDto.Comment` carries `[JsonPropertyName("comment")]`. The obvious plural deserialises to `null` with no error, which is the worst possible failure mode. |
+| C9 | `components/tree`'s `q` under the API default `strategy` returns 0 for a filename query (§1c #2, §10 #20) | `components/tree?component=quartznet_quartznet&q=QuartzScheduler&ps=2` — no `strategy`, so the documented default `all` applies — returned **10 matches**. | The `scope` parameter is still worth having (it bundles `strategy`+`qualifiers` into one comprehensible choice) but **the stated justification does not reproduce**. Phase C must re-verify before repeating the claim in a tool description; the trap may be specific to `strategy=children`, which is not the default. |
+| C10 | `sources/lines` may 404 anonymously; capture it synthetically if so (§8) | It answers **200 anonymously** on a public project. `api/sources/**raw**` is the one that 404s. | `sources-lines.json` is a live capture. §10 #18's "sources/* answers 404 for a permission problem" still stands — it is `sources/raw` that demonstrates it. |
+| C11 | `webservices/list` is the parameter catalogue (§8 item 8) | **`api/sources/lines` is absent from `webservices/list` entirely**, with *and* without `include_internals=true`, yet answers 200. | Phase D's drift test must carry `sources/lines:*` in `UndocumentedButVerified` — it is not a missing *parameter*, it is a missing *action*, so a test that looks the action up first will throw rather than fail. |
+
+Two things the design expected to be unobtainable turned out to be capturable, and both fixtures are
+therefore **live, not synthetic**: `qualitygates-project-status-error.json` (pull request 3267 was
+failing its gate) and `sources-lines.json` (C10).
+
+One more wire detail with no design row: `ComponentDto` needs **both `id` and `uuid`**. They are the
+same value under two names — the issues and components endpoints send `uuid`, the measures
+endpoints send `id`.
 
 ---
 
@@ -213,7 +236,7 @@ Result `MeasuresHistoryResult { component, metrics: [{ metric, history: [{ date,
 
 ---
 
-**14. `listMetrics`** — "List metrics" — `GET api/metrics/search?ps=500&f=name,description,domain,type,hidden`
+**14. `listMetrics`** — "List metrics" — `GET api/metrics/search?ps=500` (**C6** — no `f`: `type` is not an accepted `f` value and asking for it is a 400, while omitting `f` returns every field anyway)
 
 `query?` (substring over key/name/description), `domain?`, `includeDataMetrics?` (default `false`).
 **No `page`/`pageSize`**: the endpoint returns all 155 metrics in one 500-row call, so the tool fetches once and filters client-side, which is both cheaper and lets the filter be a substring rather than the API's non-existent `q`.
@@ -430,11 +453,11 @@ page: int, pageSize: int, totalCount: int?, hasMore: bool, note: string?
 
 `[JsonSourceGenerationOptions(DefaultIgnoreCondition = WhenWritingNull)]`, **no naming policy** — every property carries an explicit `[JsonPropertyName]`, so a refactor cannot silently change what goes on the wire. Never chained into the MCP serializer options. All properties nullable: a metric with no data, an anonymous request, and a field the endpoint simply does not return are indistinguishable.
 
-**Shared** — `PagedEnvelopeDto`, `PagingDto`, `ComponentDto` (`organization,key,uuid,enabled,qualifier,name,longName,path,project,branch,pullRequest`), `TextRangeDto`, `ImpactDto`, `ErrorEnvelopeDto`+`ErrorDto{msg}`, `ValidateResponseDto{valid}`.
+**Shared** — `PagedEnvelopeDto`, `PagingDto`, `ComponentDto` (`organization,id,key,uuid,enabled,qualifier,name,longName,path,project,language,branch,pullRequest` — `id` *and* `uuid`, because the measures endpoints send the former and everything else the latter), `TextRangeDto`, `ImpactDto`, `ErrorEnvelopeDto`+`ErrorDto{msg}`, `ValidateResponseDto{valid}`.
 
 **Issues** — `IssuesSearchResponseDto : PagedEnvelopeDto {issues[],components[],rules[],users[],facets[],effortTotal}`, `IssueDto` (all 24 fields incl. `impacts[]`, `issueStatus`, `cleanCodeAttribute*`, `transitions[]`, `comments[]`, `flows[]`), `IssueCommentDto`, `FlowDto`+`FlowLocationDto`, `RuleRefDto`, `UserRefDto`, `IssueOperationResponseDto {issue, components[], rules[], users[]}` (the shared shape of `do_transition` / `assign` / `add_comment`).
 
-**Hotspots** — `HotspotsSearchResponseDto : PagedEnvelopeDto {hotspots[],components[]}`, `HotspotDto`, and a **separate** `HotspotShowResponseDto` because `hotspots/show` returns `component`/`project` as objects — with `HotspotRuleDto {key,name,securityCategory,vulnerabilityProbability,riskDescription,vulnerabilityDescription,fixRecommendations}`, `HotspotChangelogDto`, `HotspotCommentDto`.
+**Hotspots** — `HotspotsSearchResponseDto : PagedEnvelopeDto {hotspots[],components[]}`, `HotspotDto`, and a **separate** `HotspotShowResponseDto` because `hotspots/show` returns `component`/`project` as objects, its `assignee` as a **login** rather than a UUID (**C7**), and its comments under the property name **`comment`, singular** (**C8**) — with `HotspotRuleDto {key,name,securityCategory,vulnerabilityProbability,riskDescription,vulnerabilityDescription,fixRecommendations}`, `HotspotChangelogDto`+`HotspotChangelogDiffDto`, `HotspotCommentDto`, and a `users[]` sidecar.
 
 **Measures** — `MeasuresComponentResponseDto {component, metrics[], periods[]}`, `ComponentMeasuresDto : ComponentDto {measures[]}`, **`MeasureDto {metric, value: string?, periods: MeasurePeriodDto[]?, bestValue: bool?}`** and `MeasurePeriodDto {index:int?, value: string?, bestValue: bool?}` — *`value` is `string?` on both, never `double`*, `MeasuresComponentTreeResponseDto : PagedEnvelopeDto {baseComponent, components[], metrics[]}`, `MeasuresHistoryResponseDto : PagedEnvelopeDto {measures[]}` + `MeasureHistoryDto {metric, history[]}` + `HistoryEntryDto {date, value: string?}`, `MetricsSearchResponseDto : PagedEnvelopeDto {metrics[]}` + `MetricDto`.
 
@@ -557,9 +580,19 @@ xunit.v3 + `xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk`. **No mocking 
 
 Captured from `https://sonarcloud.io`, org `quartznet`, project `quartznet_quartznet` (public and anonymously readable), each with a header comment recording the URL and capture date:
 
-`issues-search-page.json` · `issues-search-empty.json` · `issues-search-single.json` (`issues=` + `additionalFields=transitions,comments`) · `hotspots-search-page.json` · `hotspots-show.json` · `measures-component.json` (**with `new_coverage` requested and absent — the silent-omission case**) · `measures-component-periods.json` (`pullRequest=`, `additionalFields=periods`) · `measures-component-tree.json` · `measures-search-history.json` · `metrics-search.json` (`ps=500`) · `qualitygates-project-status-none.json` (**status NONE, empty conditions — the normal case**) · `components-search.json` · `components-tree-leaves.json` · `project-branches-list.json` · `project-pull-requests-list.json` · `sources-lines.json` · `rules-search-rule-key.json` (**the degraded, section-less anonymous response**) · `error-400-page-size.json` · `error-400-result-cap.json` · `error-401-authentication-required.json` · `error-401-empty-body.txt` · `error-404-component-not-found.json`.
+`issues-search-page.json` · `issues-search-empty.json` · `issues-search-single.json` (`issues=` + `additionalFields=transitions,comments`) · `hotspots-search-page.json` · `hotspots-show.json` · `measures-component.json` (**with `new_coverage` requested and absent — the silent-omission case**) · `measures-component-periods.json` (`pullRequest=`, `additionalFields=periods`) · `measures-component-tree.json` · `measures-search-history.json` · `metrics-search.json` (`ps=500`, **no `f`** — C6) · `qualitygates-project-status-none.json` (**status NONE, empty conditions — the normal case**) · `qualitygates-project-status-error.json` (**live after all** — a failing gate on a pull request) · `components-search.json` · `components-tree-leaves.json` · `project-branches-list.json` · `project-pull-requests-list.json` (**trimmed to two of 116 entries** — the endpoint has no paging parameter) · `sources-lines.json` (**live after all** — C10) · `rules-search-rule-key.json` (**the degraded, section-less anonymous response**) · `error-400-page-size.json` · `error-400-result-cap.json` · `error-401-authentication-required.json` · `error-401-empty-body.txt` · `error-404-component-not-found.json`.
 
-**Hand-written and marked `SYNTHETIC` in a header comment**, because they cannot be captured without a token or a failing gate: `qualitygates-project-status-error.json`, `rules-search-with-sections.json`, `issues-do_transition.json`, `issues-assign.json`, `issues-add_comment.json`, `hotspots-change_status-204` (empty). Phase (f) replaces every one of these with a real capture and the `SYNTHETIC` marker is removed — a test asserts no fixture still carries the marker at release time.
+**Hand-written and marked `SYNTHETIC` in `Fixtures/MANIFEST.md`**, because they cannot be captured without a token: `rules-search-with-sections.json`, `issues-do_transition.json`, `issues-assign.json`, `issues-add_comment.json`. Phase (f) replaces every one with a real capture and moves its row out of the SYNTHETIC table.
+
+Two of the six the design expected to hand-write turned out to be capturable and **are live**:
+`qualitygates-project-status-error.json` (a pull request was failing its gate at capture time) and
+`sources-lines.json` (**C10** — anonymous access to `sources/lines` is not refused). And
+`hotspots-change_status-204` has **no file at all**: the endpoint answers `204` with no body, so
+there is nothing to store and the test enqueues a bodiless 204 instead.
+
+**Provenance lives in `Fixtures/MANIFEST.md`, not in the fixtures.** JSON cannot carry comments, so
+each capture's URL, date and any normalisation is recorded there — one table for live captures, one
+for the synthetic ones. A `.json` header comment, as originally specified, would simply not parse.
 
 ### `SmokeTest` (Fallout target, not xunit)
 
@@ -618,7 +651,7 @@ Each phase is self-contained, states its inputs and outputs, and ends at a build
 4. `hotspots/change_status` rejects `ACKNOWLEDGED` on Cloud (**C2**); `hotspots/search` rejects it too, but for a different reason. Two different `resolution` value sets, one per endpoint.
 5. A 401 from a **bad token** has an **empty body** (**C3**); a 401 from **no token** has the `errors` envelope. Never dereference the envelope unconditionally.
 6. `authentication/validate` answers `{"valid":true}` **anonymously** (**C4**). It is a token-*rejection* probe, not a token-*presence* probe.
-7. `webservices/list` is incomplete: `hotspots/search` takes `branch`/`pullRequest` and `components/search` takes `qualifiers`, undocumented but verified (**C5**). The drift test must be a subset assertion with an exception list, never equality.
+7. `webservices/list` is incomplete: `hotspots/search` takes `branch`/`pullRequest` and `components/search` takes `qualifiers`, undocumented but verified (**C5**). Worse, **`api/sources/lines` is not in the catalogue at all**, with or without `include_internals=true`, yet answers 200 (**C11**). The drift test must be a subset assertion with an exception list, never equality, and it must tolerate an *action* it cannot look up rather than only a parameter.
 8. `measures/component_tree` caps `metricKeys` at **15** (`maxValuesAllowed`). Exceeding it is a 400 that reads like a value error.
 9. `measures/search_history`'s parameter is `metrics`, not `metricKeys`; its `total` counts **analyses**, not measures.
 10. `additionalFields` on measures is `[metrics, periods]` — `period` singular is a 400 (verified).
@@ -626,12 +659,12 @@ Each phase is self-contained, states its inputs and outputs, and ends at a build
 12. New-code values are in `periods[].value`, never `value`. A tool that reads `value` reports the overall number as if it were the new-code number.
 13. Measure values are **always strings**, including for `INT` and `PERCENT`. `*_rating` `"1.0"` means **A**.
 14. `issue.component` is a *key* (`project:path`), not a path. Join through the sibling `components[]` array or the model reads keys all day.
-15. Issue `assignee` is a **login**; hotspot `assignee` is a **UUID**. Different fields, different names in the result records.
-16. `hotspots/show` returns `component`/`project` as **objects**; `hotspots/search` returns them as **strings**. Two DTOs.
+15. Issue `assignee` is a **login**; `hotspots/search`'s `assignee` is a **UUID**; `hotspots/show`'s `assignee` is a **login again** (**C7**). Three fields, one name, two meanings — the result records must name them differently.
+16. `hotspots/show` returns `component`/`project` as **objects**; `hotspots/search` returns them as **strings**. Two DTOs. `show` also spells its comments array `comment`, singular (**C8**).
 17. `sources/lines`'s `code` is **syntax-highlighted HTML**. Dropped, not parsed.
 18. `sources/*` answers **404** — not 403 — for a permission problem. The error message must say so.
 19. `api/projects/search` requires org-admin. `components/search` is the list-projects endpoint.
-20. `components/tree`'s `q` only matches within the chosen `strategy`; a filename query under the default `all` returns zero. Hence the `scope` parameter.
+20. ~~`components/tree`'s `q` only matches within the chosen `strategy`; a filename query under the default `all` returns zero.~~ **Disproved 2026-08-11 (C9)**: the same query under the default `all` returned ten matches. `scope` is kept for ergonomics, not because of this trap; do not repeat the claim in a tool description without re-verifying it (it may hold for `strategy=children`, which is not the default).
 21. `branch` and `pullRequest` are mutually exclusive **everywhere**; `pullRequest` is the SCM number as a string.
 22. `createdAfter` and `createdInLast` are mutually exclusive.
 23. Resolution `FALSE-POSITIVE` has a hyphen in the legacy vocabulary while `issueStatuses` uses `FALSE_POSITIVE` with an underscore. We only expose the underscore form; the validator's rejection message must not confuse the two.

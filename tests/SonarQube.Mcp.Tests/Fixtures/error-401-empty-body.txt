@@ -1,0 +1,21 @@
+This file records a response that has no body to record.
+
+Captured 2026-08-11 against https://sonarcloud.io by sending a syntactically valid but
+non-existent user token:
+
+    GET /api/issues/search?componentKeys=quartznet_quartznet&ps=1
+    Authorization: Bearer squ_0000000000000000000000000000000000000000
+
+    HTTP/1.1 401
+    Content-Length: 0
+    (no Content-Type, no body)
+
+The same status from a request with NO Authorization header at all is a different response, and
+that one does have a body — see error-401-authentication-required.json.
+
+Both are 401. Only one of them can be quoted back to the user. Anything that composes a message
+from SonarApiException.Error has to work when it is null, which is what
+SonarApiClientTests.UnauthorizedWithAnEmptyBodyProducesAUsableMessage asserts.
+
+There is no .json file for this case because there is no JSON: a test that needs it enqueues a 401
+with a null body, which is exactly what the wire carried.

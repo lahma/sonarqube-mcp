@@ -12,6 +12,7 @@
 *.md           text eol=lf
 *.slnx         text eol=lf
 *.diff         text eol=lf
+*.txt          text eol=lf
 *.editorconfig text eol=lf
 
 # Extensionless / other config files that `text=auto` would otherwise check out as CRLF.

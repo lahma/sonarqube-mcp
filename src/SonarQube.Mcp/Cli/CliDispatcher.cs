@@ -75,8 +75,8 @@ internal static class CliDispatcher
                 // "nothing is configured" is a fact status reports, not a failure of it, so the real
                 // command exits 0 in every credential state - as this placeholder already does.
                 Console.Out.WriteLine($"{ServerVersion.Name} {ServerVersion.Value}");
-                Console.Out.WriteLine("status: not implemented yet - the configuration surface lands in Phase B " +
-                                      "and the credential probe in Phase C.");
+                Console.Out.WriteLine("status: not implemented yet - the configuration surface and the API client " +
+                                      "landed in Phase B; the credential probe and the reporting come in Phase C.");
                 return ExitSuccess;
 
             default:
