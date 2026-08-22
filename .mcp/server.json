@@ -11,7 +11,7 @@
     {
       "registryType": "nuget",
       "registryBaseUrl": "https://api.nuget.org",
-      "identifier": "sonarqube-mcp",
+      "identifier": "sonarcloud-mcp",
       "version": "1.0.0",
       "transport": {
         "type": "stdio"

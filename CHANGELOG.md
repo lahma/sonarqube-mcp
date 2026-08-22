@@ -53,16 +53,19 @@ Initial release.
   tool nor silently omit one.
 - The repository is also its own Claude Code plugin marketplace, so
   `/plugin marketplace add lahma/sonarqube-mcp` followed by `/plugin install sonarqube-mcp` wires up
-  the skill **and** the server in one step: the plugin runs `dnx sonarqube-mcp@1.0.0` and prompts
+  the skill **and** the server in one step: the plugin runs `dnx sonarcloud-mcp@1.0.0` and prompts
   for the token, storing it as a sensitive value. The plugin's source is the repository root, which
   is what lets it point at the one canonical `SKILL.md` instead of carrying a copy, and the `dnx`
   pin, the plugin version and this changelog are asserted to be the same string.
 - Native AOT single binary for win-x64, win-arm64, linux-x64, linux-arm64 and osx-arm64, published
   from a three-package runtime dependency tree — the MCP SDK, dependency injection and console
   logging, and nothing else.
-- Also on nuget.org as the `sonarqube-mcp` .NET tool package, so `dnx sonarqube-mcp@1.0.0 --yes`
-  runs the server without a download step. It is pushed by trusted publishing — a tag-triggered
-  workflow exchanges its GitHub OIDC token for an API key that lives minutes — so no NuGet API key
-  is stored anywhere. The Native AOT binaries remain the recommended way to run the server.
+- Also on nuget.org as the `sonarcloud-mcp` .NET tool package, so `dnx sonarcloud-mcp@1.0.0 --yes`
+  runs the server without a download step. The package id is the one name that is not
+  `sonarqube-mcp`: the `SonarQube*` id prefix is reserved on nuget.org by SonarSource, so the
+  package is published as `sonarcloud-mcp` and installs a command still called `sonarqube-mcp`. It
+  is pushed by trusted publishing — a tag-triggered workflow exchanges its GitHub OIDC token for an
+  API key that lives minutes — so no NuGet API key is stored anywhere. The Native AOT binaries
+  remain the recommended way to run the server.
 - SonarQube Cloud only, over the v1 `api/` web services. SonarQube Server is out of scope, and
   `SONARQUBE_URL` is allowlisted to the Cloud hosts rather than merely parsed.

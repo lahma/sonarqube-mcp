@@ -48,7 +48,7 @@ are in [AGENTS.md](AGENTS.md#tool-table).
 
 Two channels. The **Native AOT binary is the recommended one** — self-contained, nothing to
 install, roughly ten milliseconds to start. The
-[NuGet package](https://www.nuget.org/packages/sonarqube-mcp) is the convenience one: no download
+[NuGet package](https://www.nuget.org/packages/sonarcloud-mcp) is the convenience one: no download
 step, at the cost of needing the .NET 10 SDK and a JIT startup.
 
 ### Native AOT binary (recommended)
@@ -83,12 +83,15 @@ sonarqube-mcp status     Show the resolved configuration and probe the credentia
 ### NuGet package (`dnx`)
 
 The same server is published to nuget.org as
-[`sonarqube-mcp`](https://www.nuget.org/packages/sonarqube-mcp), a .NET tool package carrying the
-`McpServer` package type. `dnx` — part of the .NET 10 SDK — downloads and runs it in one step, so
-there is nothing to install and nothing to keep up to date by hand:
+[`sonarcloud-mcp`](https://www.nuget.org/packages/sonarcloud-mcp), a .NET tool package carrying the
+`McpServer` package type. The package id is `sonarcloud-mcp` rather than `sonarqube-mcp` because the
+`SonarQube*` package-id prefix is reserved on nuget.org by SonarSource; nothing else is renamed, and
+the command the package installs is still `sonarqube-mcp`. `dnx` — part of the .NET 10 SDK —
+downloads and runs it in one step, so there is nothing to install and nothing to keep up to date by
+hand:
 
 ```bash
-dnx sonarqube-mcp@1.0.0 --yes status
+dnx sonarcloud-mcp@1.0.0 --yes status
 ```
 
 `--yes` accepts the download prompt and is consumed by `dnx` itself; everything after it is passed
@@ -101,7 +104,7 @@ speaks MCP over stdio, which is how a client should launch it:
     "sonarqube": {
       "type": "stdio",
       "command": "dnx",
-      "args": ["sonarqube-mcp@1.0.0", "--yes"],
+      "args": ["sonarcloud-mcp@1.0.0", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "...",
         "SONARQUBE_ORG": "my-org"

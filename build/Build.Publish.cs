@@ -20,7 +20,9 @@ using static Fallout.Common.Tools.DotNet.DotNetTasks;
 /// </summary>
 /// <remarks>
 /// The Native AOT binaries on GitHub Releases remain the primary channel; this one exists so a
-/// user can type <c>dnx sonarqube-mcp</c> without downloading an archive first. There is no preview
+/// user can type <c>dnx sonarcloud-mcp</c> without downloading an archive first (that is the NuGet
+/// id, D17 - nuget.org reserves the <c>SonarQube*</c> prefix to SonarSource; everything else in this
+/// repository, the installed command included, is still called <c>sonarqube-mcp</c>). There is no preview
 /// feed: the only push this repository ever makes is a tagged release to nuget.org, which is why
 /// <c>Publish</c> is a single-source target gated on <see cref="Build.IsTaggedBuild"/> rather than
 /// a two-way switch between a release feed and a preview one.

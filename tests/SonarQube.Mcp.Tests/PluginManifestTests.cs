@@ -43,8 +43,14 @@ public class PluginManifestTests
     private const string ServerManifestPath = ".mcp/server.json";
     private const string ChangelogPath = "CHANGELOG.md";
 
-    /// <summary>The NuGet package `dnx` is told to run — the same id `.mcp/server.json` identifies.</summary>
-    private const string PackageId = "sonarqube-mcp";
+    /// <summary>
+    /// The plugin's own name, which is the repository's name — deliberately <em>not</em> the NuGet
+    /// package id. The two were the same string until nuget.org rejected <c>sonarqube-mcp</c> under
+    /// SonarSource's reserved <c>SonarQube*</c> id prefix (2026-08-22) and the package became
+    /// <c>sonarcloud-mcp</c>; nothing else was renamed. Keeping one constant for both would have
+    /// made this test enforce a coincidence.
+    /// </summary>
+    private const string PluginName = "sonarqube-mcp";
 
     /// <summary>
     /// The plugin's source is the repository root, which is what lets the manifest point at the one
@@ -59,7 +65,7 @@ public class PluginManifestTests
         using var marketplace = Read(root, MarketplacePath);
         using var plugin = Read(root, PluginPath);
 
-        Assert.Equal(PackageId, marketplace.RootElement.GetProperty("name").GetString());
+        Assert.Equal(PluginName, marketplace.RootElement.GetProperty("name").GetString());
 
         Assert.False(
             string.IsNullOrWhiteSpace(marketplace.RootElement.GetProperty("owner").GetProperty("name").GetString()),
@@ -88,10 +94,16 @@ public class PluginManifestTests
     }
 
     /// <summary>
-    /// The bundled server is pinned, not floating. A floating <c>dnx sonarqube-mcp</c> would change
+    /// The bundled server is pinned, not floating. A floating <c>dnx sonarcloud-mcp</c> would change
     /// what the plugin runs without the plugin version changing — invisible to <c>/plugin update</c>,
     /// and able to pair this release's skill with a server that no longer matches it.
     /// </summary>
+    /// <remarks>
+    /// The id is read out of <c>.mcp/server.json</c> rather than written here, which closes the
+    /// chain: <see cref="McpServerManifestTests"/> pins that identifier to the csproj's
+    /// <c>&lt;PackageId&gt;</c>, so a rename of the package has exactly one place to be made and
+    /// this assertion follows it instead of having to be remembered.
+    /// </remarks>
     [Fact]
     public void TheBundledServerIsPinnedToThatSameVersion()
     {
@@ -99,6 +111,9 @@ public class PluginManifestTests
         var version = ReadChangelogVersion(root);
 
         using var plugin = Read(root, PluginPath);
+        using var server = Read(root, ServerManifestPath);
+
+        var packageId = NuGetPackage(server).GetProperty("identifier").GetString();
 
         var arguments = SingleServer(plugin)
             .GetProperty("args")
@@ -106,7 +121,7 @@ public class PluginManifestTests
             .Select(argument => argument.GetString())
             .ToList();
 
-        Assert.Contains($"{PackageId}@{version}", arguments);
+        Assert.Contains($"{packageId}@{version}", arguments);
     }
 
     /// <summary>
@@ -154,9 +169,7 @@ public class PluginManifestTests
         using var plugin = Read(root, PluginPath);
         using var server = Read(root, ServerManifestPath);
 
-        var documented = server.RootElement.GetProperty("packages")
-            .EnumerateArray()
-            .Single(package => package.GetProperty("registryType").GetString() == "nuget")
+        var documented = NuGetPackage(server)
             .GetProperty("environmentVariables")
             .EnumerateArray()
             .ToDictionary(
@@ -202,6 +215,15 @@ public class PluginManifestTests
 
     private static JsonDocument Read(string root, string relativePath)
         => JsonDocument.Parse(File.ReadAllText(Path.Combine(root, relativePath)));
+
+    /// <summary>
+    /// The one <c>packages</c> entry of <c>.mcp/server.json</c> that describes the NuGet channel —
+    /// the id <c>dnx</c> is given and the environment variables it documents both come from there.
+    /// </summary>
+    private static JsonElement NuGetPackage(JsonDocument server)
+        => server.RootElement.GetProperty("packages")
+            .EnumerateArray()
+            .Single(package => package.GetProperty("registryType").GetString() == "nuget");
 
     /// <summary>The plugin bundles exactly one MCP server; more would need naming here to be meaningful.</summary>
     private static JsonElement SingleServer(JsonDocument plugin)
