@@ -16,7 +16,7 @@
   "mcpServers": {
     "sonarqube": {
       "command": "dnx",
-      "args": ["sonarcloud-mcp@1.0.0", "--yes"],
+      "args": ["mcp-sonarqube@1.0.0", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "${user_config.sonarqube_token}",
         "SONARQUBE_ORG": "${user_config.sonarqube_org}",

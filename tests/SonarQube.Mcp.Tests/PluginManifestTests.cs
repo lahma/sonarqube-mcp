@@ -45,10 +45,11 @@ public class PluginManifestTests
 
     /// <summary>
     /// The plugin's own name, which is the repository's name — deliberately <em>not</em> the NuGet
-    /// package id. The two were the same string until nuget.org rejected <c>sonarqube-mcp</c> under
-    /// SonarSource's reserved <c>SonarQube*</c> id prefix (2026-08-22) and the package became
-    /// <c>sonarcloud-mcp</c>; nothing else was renamed. Keeping one constant for both would have
-    /// made this test enforce a coincidence.
+    /// package id. The two were the same string until nuget.org rejected <c>sonarqube-mcp</c>, and
+    /// then <c>sonarcloud-mcp</c>, under SonarSource's reserved <c>SonarQube*</c> and
+    /// <c>SonarCloud*</c> id prefixes (2026-08-22) and the package became <c>mcp-sonarqube</c>;
+    /// nothing else was renamed. Keeping one constant for both would have made this test enforce a
+    /// coincidence.
     /// </summary>
     private const string PluginName = "sonarqube-mcp";
 
@@ -94,7 +95,7 @@ public class PluginManifestTests
     }
 
     /// <summary>
-    /// The bundled server is pinned, not floating. A floating <c>dnx sonarcloud-mcp</c> would change
+    /// The bundled server is pinned, not floating. A floating <c>dnx mcp-sonarqube</c> would change
     /// what the plugin runs without the plugin version changing — invisible to <c>/plugin update</c>,
     /// and able to pair this release's skill with a server that no longer matches it.
     /// </summary>

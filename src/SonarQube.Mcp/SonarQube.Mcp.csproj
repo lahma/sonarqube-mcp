@@ -17,29 +17,32 @@
   </PropertyGroup>
 
   <!-- D17: the NuGet convenience channel. `dotnet pack` produces a framework-dependent .NET tool
-       package (`dnx sonarcloud-mcp`); the Native AOT single binary published to GitHub Releases
+       package (`dnx mcp-sonarqube`); the Native AOT single binary published to GitHub Releases
        stays the recommended way to run the server. PackageType McpServer is what nuget.org filters
        on to show the MCP tab and generate client configuration; PackAsTool already makes it a tool
        package, so DotnetTool is deliberately NOT listed alongside it (the mcpserver template does
        the same).
 
-       PackageId is sonarcloud-mcp, not sonarqube-mcp, and it is the ONLY name that differs from the
-       product: SonarSource holds the reserved `SonarQube*` package-id prefix on nuget.org, so the
-       first push of `sonarqube-mcp` was rejected (2026-08-22). ToolCommandName stays sonarqube-mcp
-       deliberately - it is the command the package installs and the name every archive, binary and
-       document uses, and the id a package is fetched by is not the name it runs under. -->
+       PackageId is mcp-sonarqube, not sonarqube-mcp, and it is the ONLY name that differs from the
+       product: SonarSource holds BOTH the `SonarQube*` and the `SonarCloud*` reserved package-id
+       prefixes on nuget.org, discovered by two rejected pushes of v1.0.0 on 2026-08-22 - first
+       `sonarqube-mcp`, then `sonarcloud-mcp`, each answered Conflict. `mcp-*` is unreserved (many
+       independent owners publish under it), so the id leads with it. ToolCommandName stays
+       sonarqube-mcp deliberately - it is the command the package installs and the name every
+       archive, binary and document uses, and the id a package is fetched by is not the name it
+       runs under. -->
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackAsTool>true</PackAsTool>
     <PackageType>McpServer</PackageType>
-    <PackageId>sonarcloud-mcp</PackageId>
+    <PackageId>mcp-sonarqube</PackageId>
     <ToolCommandName>sonarqube-mcp</ToolCommandName>
     <!-- The tool half is framework-dependent, so it must keep working on a runtime newer than the
          one it was built against. -->
     <RollForward>Major</RollForward>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>mcp;mcp-server;model-context-protocol;sonarqube;sonarcloud;sonarqube-cloud;code-quality;static-analysis;ai;stdio</PackageTags>
-    <Description>Model Context Protocol server for SonarQube Cloud - projects, quality gates, issues, security hotspots, measures and coverage, plus issue triage - with a deliberately small, auditable dependency tree. Native AOT binaries are published to GitHub Releases; this package is the `dnx sonarcloud-mcp` convenience channel (the id differs from the product name because the SonarQube* package-id prefix is reserved on nuget.org; the installed command is still `sonarqube-mcp`).</Description>
+    <Description>Model Context Protocol server for SonarQube Cloud - projects, quality gates, issues, security hotspots, measures and coverage, plus issue triage - with a deliberately small, auditable dependency tree. Native AOT binaries are published to GitHub Releases; this package is the `dnx mcp-sonarqube` convenience channel (the id differs from the product name because SonarSource holds both the SonarQube* and SonarCloud* reserved package-id prefixes on nuget.org; the installed command is still `sonarqube-mcp`).</Description>
   </PropertyGroup>
 
   <!-- PackTool.targets packs $(PublishDir), so `dotnet pack` runs a publish of this project. Left
