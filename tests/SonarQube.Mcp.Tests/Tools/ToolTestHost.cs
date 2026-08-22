@@ -341,6 +341,31 @@ internal static class ToolPayloads
         }
         """;
 
+    /// <summary>
+    /// A component tree whose ranking filter matched nothing.
+    /// </summary>
+    /// <remarks>
+    /// Hand-written because the interesting half of it is what the API leaves out: ranking
+    /// <c>quartznet_quartznet</c> by <c>coverage</c> — a project that publishes none — really does
+    /// answer <c>total: 0</c> with an empty <c>components</c>, and the response says nothing at all
+    /// about why. <c>baseComponent.measures</c> comes back <c>[]</c> here exactly as it does on the
+    /// ranking that succeeded (<c>Fixtures/measures-component-tree-coverage-sorted.json</c>), so
+    /// there is no field to tell the two apart and the reasoning has to be done by the mapper.
+    /// </remarks>
+    internal const string ComponentTreeRankedToNothing = """
+        {
+          "paging": { "pageIndex": 1, "pageSize": 50, "total": 0 },
+          "baseComponent": {
+            "id": "AYloNkLywDG_abJFLUp5",
+            "key": "quartznet_quartznet",
+            "name": "quartznet",
+            "qualifier": "TRK",
+            "measures": []
+          },
+          "components": []
+        }
+        """;
+
     /// <summary>A measure response whose rating and new-code values are both worth translating.</summary>
     internal const string MeasuresWithRatingAndPeriods = """
         {

@@ -567,9 +567,18 @@ internal static class ResultMapper
     }
 
     /// <summary>Maps one page of components with their measures.</summary>
+    /// <remarks>
+    /// <paramref name="sortByMetric"/> is the resolved rank-by metric, or <see langword="null"/> when
+    /// the caller asked for no ranking. It changes how an <em>empty</em> page reads: sorting sends
+    /// <c>metricSortFilter=withMeasuresOnly</c>, which drops every component that has no value for
+    /// that one metric, so zero rows is a statement about it alone. Without this the missing-metric
+    /// diff would name every requested metric — including ones the project measures in the hundreds
+    /// of thousands — because none of them appeared on a page that has nothing on it.
+    /// </remarks>
     internal static ComponentMeasuresResult TreeMeasures(
         MeasuresComponentTreeResponseDto response,
         IReadOnlyList<string> requestedMetrics,
+        string? sortByMetric,
         string project,
         AnalysisScope scope,
         int requestedPage,
@@ -597,6 +606,9 @@ internal static class ResultMapper
             });
         }
 
+        // The ranking filter matched nothing, which is not the same as the scope being empty.
+        var emptyRanking = page.Total is 0 && !string.IsNullOrEmpty(sortByMetric) ? sortByMetric : null;
+
         return new ComponentMeasuresResult
         {
             Components = components,
@@ -604,8 +616,10 @@ internal static class ResultMapper
             PageSize = page.PageSize,
             TotalCount = page.Total,
             HasMore = HasMore(page),
-            Note = CapNote(page.Total),
-            MissingMetrics = MeasureFormatting.MissingMetrics(requestedMetrics, returned),
+            Note = emptyRanking is null ? CapNote(page.Total) : EmptyRankingNote(emptyRanking),
+            MissingMetrics = emptyRanking is null
+                ? MeasureFormatting.MissingMetrics(requestedMetrics, returned)
+                : [emptyRanking],
         };
     }
 
@@ -775,7 +789,13 @@ internal static class ResultMapper
             measured |= hits is not null;
 
             var isUncovered = hits == 0;
-            var isPartial = hits > 0 && conditions > 0 && covered < conditions;
+
+            // `covered ?? 0` rather than the lifted comparison: an absent coveredConditions beside a
+            // present conditions would make `covered < conditions` false and hide a branch line that
+            // nothing exercised. SonarQube has never been seen to omit it — 39 branch lines across
+            // five files all carried both — but the cost of being wrong is a line the caller is told
+            // is fully covered, and the cost of hardening it is one operator.
+            var isPartial = hits > 0 && conditions > 0 && (covered ?? 0) < conditions;
 
             if (isUncovered)
             {
@@ -824,7 +844,7 @@ internal static class ResultMapper
             NewLines = newLines,
             DuplicatedLines = duplicated,
             Lines = lines,
-            Note = CoverageNote(measured, onlyUncovered, from, to),
+            Note = CoverageNote(measured, uncovered.Count == 0 && partial.Count == 0, onlyUncovered, from, to),
             Url = ComponentKeys.ComponentUrl(baseUrl, project, component, scope),
         };
     }
@@ -925,6 +945,23 @@ internal static class ResultMapper
     /// </summary>
     private static bool HasMore<T>(PagedResult<T> page) =>
         page.Items.Count > 0 && page.Total is { } total && (long) page.Page * page.PageSize < total;
+
+    /// <summary>
+    /// Explains a ranking that came back empty, which is a fact about one metric and not about the
+    /// scope.
+    /// </summary>
+    /// <remarks>
+    /// Sorting sends <c>metricSortFilter=withMeasuresOnly</c>, so "rank these files by coverage" in a
+    /// project that publishes no coverage answers with zero components — and every other metric the
+    /// caller asked for goes unreported too, having had no row to appear on. Saying which metric
+    /// emptied the page is what stops that being read as "this project measures nothing".
+    /// </remarks>
+    private static string EmptyRankingNote(string sortByMetric) =>
+        "No component under this scope has a value for " + sortByMetric + ", so the ranking is empty and " +
+        "missingMetrics names that metric alone — the other requested metrics were not reported because " +
+        "there was no row to report them on. " + sortByMetric + " is not measured here; it is not measured " +
+        "as zero. Read one component with getComponentMeasures to see what is measured, or call listMetrics " +
+        "to check the key exists.";
 
     /// <summary>Warns when the 10,000-result window is in reach, before the caller pages into it.</summary>
     private static string? CapNote(int? total) =>
@@ -1102,10 +1139,22 @@ internal static class ResultMapper
         value is not null && value.Contains(query, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Says which lines the result contains, and warns when the file has no coverage data at all —
-    /// an empty <c>uncoveredLines</c> means "fully covered" only if coverage was measured.
+    /// Says which lines the result contains, and tells the two ways of arriving at empty arrays
+    /// apart.
     /// </summary>
-    private static string CoverageNote(bool measured, bool onlyUncovered, int from, int to)
+    /// <remarks>
+    /// A file with no coverage data and a range where every line is covered both answer with an empty
+    /// <c>uncoveredLines</c> and an empty <c>partiallyCoveredLines</c>, and they mean opposite things.
+    /// The unmeasured case has always said so; the clean case used to say nothing, leaving the caller
+    /// to infer success from an absence — which is the inference this whole tool exists to prevent.
+    /// So it is stated outright.
+    /// </remarks>
+    /// <param name="measured">Whether any line in the range carried coverage data at all.</param>
+    /// <param name="clean">Whether the range was measured and nothing in it is uncovered or partial.</param>
+    /// <param name="onlyUncovered">Whether <c>lines</c> was filtered.</param>
+    /// <param name="from">First line read.</param>
+    /// <param name="to">Last line read.</param>
+    private static string CoverageNote(bool measured, bool clean, bool onlyUncovered, int from, int to)
     {
         var range = string.Create(CultureInfo.InvariantCulture, $"Lines {from}–{to} were read. ");
 
@@ -1115,6 +1164,16 @@ internal static class ResultMapper
                 "SonarQube has no coverage data for this file, so uncoveredLines being empty does not mean the " +
                 "file is covered — it means coverage was never measured. Check that the analysis publishes a " +
                 "coverage report, or read the project's coverage metric with getComponentMeasures.";
+        }
+
+        if (clean)
+        {
+            return range +
+                "Coverage is measured for this file and no line in this range is uncovered or partially " +
+                "covered, so the empty arrays mean covered rather than unmeasured. " +
+                (onlyUncovered
+                    ? "lines is empty for the same reason; pass onlyUncovered=false for every line in the range."
+                    : "lines lists every line in the range.");
         }
 
         return onlyUncovered

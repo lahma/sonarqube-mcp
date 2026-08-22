@@ -99,9 +99,12 @@ internal sealed class MeasureReadTools
         UseStructuredContent = true)]
     [Description(
         "Reads metrics for every component under a project or directory, one row per file — this is how to " +
-        "answer \"which files are worst?\". Pass sortByMetric with the metric to rank by and leave ascending " +
-        "false to get the worst first; components with no value for that metric are left out rather than " +
-        "sorted to the top. At most 15 metricKeys here, which is the API's own limit. Results are paginated.")]
+        "answer \"which files are worst?\". Pass sortByMetric with the metric to rank by. ascending=false " +
+        "(the default) puts the LARGEST values first, which is the worst end for uncovered_lines, complexity " +
+        "or duplicated_lines_density and the BEST end for coverage — rank by coverage with ascending=true. " +
+        "Components with no value for the sort metric are excluded rather than ranked first, so an empty page " +
+        "means nothing under this scope measures it. At most 15 metricKeys here, which is the API's own limit. " +
+        "Results are paginated.")]
     public static async Task<ComponentMeasuresResult> ListComponentMeasuresAsync(
         SonarApiClient client,
         SonarQubeMcpOptions options,
@@ -115,7 +118,7 @@ internal sealed class MeasureReadTools
         string? scope = null,
         [Description("A metric key to rank by, for example \"coverage\" or \"complexity\". Components with no value for it are excluded rather than ranked first.")]
         string? sortByMetric = null,
-        [Description("Sort ascending. Defaults to false, which puts the largest values - usually the worst files - first.")]
+        [Description("Sort ascending. Defaults to false, which puts the largest values first: the worst end for uncovered_lines, complexity, ncloc and duplicated_lines_density, and the best end for coverage and every other higher-is-better metric. Pass true when ranking by coverage.")]
         bool ascending = false,
         [Description("Substring matched against component name and path.")]
         string? query = null,
@@ -138,6 +141,12 @@ internal sealed class MeasureReadTools
         var analysisScope = ToolDefaults.ResolveScope(branch, pullRequest);
         var paging = ToolDefaults.ResolvePaging(page, pageSize, options);
 
+        // Normalised once and handed to both halves of the call, so the two cannot disagree: the
+        // client sends the three sort parameters only when this is non-blank, and the mapper has to
+        // know whether metricSortFilter=withMeasuresOnly was in play before it can read an empty
+        // page as a statement about one metric rather than about all of them.
+        var rankBy = string.IsNullOrWhiteSpace(sortByMetric) ? null : sortByMetric.Trim();
+
         var context = new ToolCallContext("listComponentMeasures", project, componentKey);
 
         return await ToolErrors.ExecuteAsync(context, async () =>
@@ -148,7 +157,7 @@ internal sealed class MeasureReadTools
                     selection.Strategy,
                     selection.Qualifiers,
                     query,
-                    sortByMetric,
+                    rankBy,
                     ascending,
                     MeasureAdditionalFields,
                     analysisScope.Branch,
@@ -159,7 +168,14 @@ internal sealed class MeasureReadTools
                 .ConfigureAwait(false);
 
             return ResultMapper.TreeMeasures(
-                response, metrics, project, analysisScope, paging.Page, paging.PageSize, options.BaseUrlText);
+                response,
+                metrics,
+                rankBy,
+                project,
+                analysisScope,
+                paging.Page,
+                paging.PageSize,
+                options.BaseUrlText);
         }).ConfigureAwait(false);
     }
 

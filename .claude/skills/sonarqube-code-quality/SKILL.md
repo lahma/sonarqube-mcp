@@ -54,9 +54,14 @@ comes back empty.
 
 ## A coverage pass
 
-1. `listComponentMeasures` with `sortByMetric="coverage"` and `ascending=true` — the worst-covered
-   files first, one row per file. `listMetrics` is how to find a metric key rather than guessing
-   one; a key that does not exist is not an error, it is a silently missing measure.
+1. `listComponentMeasures` with `sortByMetric="uncovered_lines"` and the default `ascending=false` —
+   the biggest gaps first, one row per file, and no direction to get wrong: more uncovered lines is
+   always worse. **Ranking by `coverage` needs `ascending=true`.** The default puts the largest
+   values first, and the largest coverage is the *best* file — and even done right it answers with a
+   page of tiny 0% files ahead of the one file with 173 uncovered lines that is actually the work.
+   An empty ranking means nothing under that scope measures the metric at all; the note says so.
+   `listMetrics` is how to find a metric key rather than guessing one; a key that does not exist is
+   not an error, it is a silently missing measure.
 2. `getComponentMeasures` on the project for the headline numbers, and on a single file when only
    one file is in question. Read `missingMetrics` before drawing a conclusion: a metric that is
    absent was not measured, and `newCodeValue` is where every `new_*` number lives.

@@ -446,6 +446,40 @@ public class ResultMapperTests
         Assert.Contains("only lets the first 10000 results be paged through", result.Note, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A branch line whose <c>coveredConditions</c> is missing is partially covered, not covered.
+    /// </summary>
+    /// <remarks>
+    /// Written by hand because SonarQube has never been seen to send it: 39 branch lines across five
+    /// live files all carried <c>conditions</c> and <c>coveredConditions</c> together. The guard is
+    /// here anyway because the comparison it replaces is a <em>lifted</em> one — <c>null &lt; 2</c>
+    /// is false — so the absence would have read as "every branch covered" and dropped the line from
+    /// the result entirely. Silent, and wrong in the direction that costs a test. The second line
+    /// pins the other half: zero hits is uncovered whatever the conditions say, and uncovered only.
+    /// </remarks>
+    [Fact]
+    public void ABranchLineWithNoCoveredConditionCountIsPartialRatherThanCovered()
+    {
+        var response = JsonSerializer.Deserialize(
+            """
+            {
+              "sources": [
+                { "line": 10, "lineHits": 4, "conditions": 2 },
+                { "line": 11, "lineHits": 0, "conditions": 2 }
+              ]
+            }
+            """,
+            SonarWireJsonContext.Default.SourcesLinesResponseDto)!;
+
+        var result = ResultMapper.Coverage(response, FileKey, Project, 10, 11, true, default, BaseUrl);
+
+        Assert.Equal([10], result.PartiallyCoveredLines);
+        Assert.Equal([11], result.UncoveredLines);
+
+        // Both are worth a test, so both survive the onlyUncovered filter.
+        Assert.Equal([10, 11], result.Lines.Select(line => line.Line));
+    }
+
     private static IssuesSearchResponseDto Issues(string fixture) =>
         JsonSerializer.Deserialize(
             SonarFixtures.Read(fixture),

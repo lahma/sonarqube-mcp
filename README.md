@@ -332,9 +332,11 @@ Triaging a pull request whose gate has gone red, end to end:
 
 Two more passes worth knowing, both described in full in the shipped skill:
 
-- **Coverage.** `listComponentMeasures` with `sortByMetric: "coverage"` and `ascending: true` ranks
-  the worst-covered files; `getFileCoverage` on the worst one returns the actual line numbers tests
-  never executed. That is the actionable form of "coverage is too low".
+- **Coverage.** `listComponentMeasures` with `sortByMetric: "uncovered_lines"` ranks the biggest gaps
+  first. Ranking by `"coverage"` instead needs `ascending: true` — the default order is largest-first,
+  and the largest coverage is the *best*-covered file. `getFileCoverage` on whichever file comes out
+  on top returns the actual line numbers tests never executed. That is the actionable form of
+  "coverage is too low".
 - **Security hotspots.** `searchHotspots` with `status: "TO_REVIEW"`, `getHotspot` for the risk
   description and `canChangeStatus`, then `setHotspotStatus` with `REVIEWED` plus `SAFE` or `FIXED`
   and a justification comment.

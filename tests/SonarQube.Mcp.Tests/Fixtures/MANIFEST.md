@@ -71,6 +71,29 @@ still transitionable at capture time.
 | `rules-search-with-sections.json` | `GET api/rules/search?organization=quartznet&rule_key=csharpsquid:S2259&f=descriptionSections,name,cleanCodeAttribute,impacts,repo,langName,securityStandards,tags&ps=1` | **C1, closed.** Byte for byte the same request as the anonymous `rules-search-rule-key.json` above; the only difference is the `Authorization` header, and this one has `descriptionSections`. So the empty response is an anonymous-access restriction, not an entitlement and not a parameter error. The wire order is `how_to_fix, root_cause, resources` — there is no `introduction`, and no section carries a `context`. |
 | `rules-search-with-contexts.json` | `GET api/rules/search?organization=quartznet&rule_key=javasecurity:S2076&f=…&ps=1` (same `f` list) | The per-framework shape, which `csharpsquid:S2259` does not have: `how_to_fix` appears **twice**, once per `context` (`java_lang_package` / *Java Lang Package*, `apache_commons` / *Apache Commons*), while `root_cause` and `resources` carry none. A Java rule because no C# rule in this organization's profiles has contexts. |
 
+## Anonymous coverage captures — 2026-08-22
+
+**A different organization and project from every other row here**: organization `apache`, project
+`apache_creadur-rat` (Apache Creadur RAT — public, anonymously readable, 17 522 ncloc, `coverage`
+75.9 %). The reason is simple and worth writing down rather than rediscovering: **`quartznet`
+publishes no coverage report at all**, so no request against it can produce a `lineHits`, a
+`conditions` or a coverage-ranked component tree. The shapes below only exist in a project that
+measures coverage, and the coverage path is the one thing SonarQube knows that a checkout does not
+(`getFileCoverage`'s whole reason to exist), so it is worth a second project to have them off the
+wire rather than written to suit the mapper. Creadur RAT is small enough that a fifteen-line window
+contains every per-line state at once.
+
+Captured anonymously, no `Authorization` header, same CRLF → LF normalisation and nothing else.
+
+| Fixture | Request | Notes |
+|---|---|---|
+| `sources-lines-with-coverage.json` | `GET api/sources/lines?key=apache_creadur-rat%3Aapache-rat-core%2Fsrc%2Fmain%2Fjava%2Forg%2Fapache%2Frat%2Fconfiguration%2Fbuilders%2FRegexBuilder.java&from=43&to=57` | **All four per-line coverage states in one 15-line window.** Partially covered: 43 and 49 (`lineHits:1`, `conditions:2`, `coveredConditions:1`). Uncovered: 50 (`lineHits:0`, no conditions) and 57 (`lineHits:0` **with** `conditions:2`, `coveredConditions:0`) — 57 is the one that proves an unexecuted branch line is uncovered and *not* also partial. Covered: 44 and 52. And nine lines — 45–48, 51, 53–56 — inside a measured file with **no `lineHits` property at all**, which is the non-executable case that must land in neither array. Every line also carries the `ut*` twins (`utLineHits`, `utConditions`, `utCoveredConditions`) that the DTO ignores. |
+| `sources-lines-fully-covered.json` | `GET api/sources/lines?key=apache_creadur-rat%3Aapache-rat-core%2Fsrc%2Fmain%2Fjava%2Forg%2Fapache%2Frat%2Fannotation%2FApacheV2LicenseAppender.java&from=40&to=54` | **Measured and clean**, which is the case that used to be indistinguishable from never-measured: five lines at `lineHits:1`, ten with no `lineHits`, nothing uncovered and nothing partial. Both arrays come back empty here and in the unmeasured case, and only the `note` tells them apart — this fixture is what pins the affirmative wording. |
+| `measures-component-tree-coverage-sorted.json` | `GET api/measures/component_tree?component=apache_creadur-rat&metricKeys=coverage,uncovered_lines,uncovered_conditions,ncloc&strategy=leaves&qualifiers=FIL,UTS&s=metric&metricSort=coverage&metricSortFilter=withMeasuresOnly&asc=true&additionalFields=periods&p=1&ps=5` | The `listComponentMeasures(sortByMetric:"coverage", ascending:true, scope:"files")` request, byte for byte. `paging.total` is **168**; the same query without `metricSortFilter` reports **340**, so the filter is provably doing the excluding the design relies on — and an empty page under it is a statement about the sort metric alone. `baseComponent.measures` is `[]`, and the five components come back in the order the API ranked them, which the mapper must not re-sort. |
+
+**`quartznet` is still the default.** Only these three rows come from `apache`, and nothing in the
+code cares — the fixtures are response bodies, and the project key inside them is data.
+
 **`hotspots/change_status` has no fixture.** It answers `204` with no body, so there is nothing to
 store; a test that needs it enqueues a bodiless 204, which is precisely what the wire carries.
 

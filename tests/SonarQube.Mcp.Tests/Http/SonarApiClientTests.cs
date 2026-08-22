@@ -1361,7 +1361,7 @@ public class SonarApiClientTests
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.HotspotShowResponseDto),
             "measures-component.json" or "measures-component-periods.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresComponentResponseDto),
-            "measures-component-tree.json" =>
+            "measures-component-tree.json" or "measures-component-tree-coverage-sorted.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresComponentTreeResponseDto),
             "measures-search-history.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresHistoryResponseDto),
@@ -1380,7 +1380,7 @@ public class SonarApiClientTests
             "rules-search-rule-key.json" or "rules-search-with-sections.json"
                 or "rules-search-with-contexts.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.RulesSearchResponseDto),
-            "sources-lines.json" =>
+            "sources-lines.json" or "sources-lines-with-coverage.json" or "sources-lines-fully-covered.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.SourcesLinesResponseDto),
             var name when name.StartsWith("error-", StringComparison.Ordinal) =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.ErrorEnvelopeDto),
@@ -1410,6 +1410,8 @@ public class SonarApiClientTests
             "project-branches-list.json", "project-pull-requests-list.json",
             "sources-lines.json", "rules-search-rule-key.json", "rules-search-with-sections.json",
             "rules-search-with-contexts.json",
+            "sources-lines-with-coverage.json", "sources-lines-fully-covered.json",
+            "measures-component-tree-coverage-sorted.json",
             "issues-do_transition.json", "issues-assign.json", "issues-add_comment.json",
             "error-400-page-size.json", "error-400-result-cap.json",
             "error-401-authentication-required.json", "error-404-component-not-found.json",

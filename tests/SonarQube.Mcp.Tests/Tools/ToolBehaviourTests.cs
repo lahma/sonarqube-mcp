@@ -52,6 +52,21 @@ public class ToolBehaviourTests
     /// <summary>The text of <see cref="WriteCommentKey"/>, so request and response describe one call.</summary>
     private const string WriteCommentText = "sonarqube-mcp wire capture 2 - removing shortly";
 
+    /// <summary>
+    /// The project the three coverage fixtures came from: public, anonymously readable, and outside
+    /// this organization on purpose — <c>quartznet</c> publishes no coverage report, so none of the
+    /// coverage-bearing shapes can be captured from it. See <c>Fixtures/MANIFEST.md</c>.
+    /// </summary>
+    private const string CoverageProject = "apache_creadur-rat";
+
+    /// <summary>The file whose lines 43–57 carry all four per-line coverage states at once.</summary>
+    private const string CoverageFile =
+        "apache-rat-core/src/main/java/org/apache/rat/configuration/builders/RegexBuilder.java";
+
+    /// <summary>A file whose lines 40–54 are measured and have nothing wrong with them.</summary>
+    private const string CleanCoverageFile =
+        "apache-rat-core/src/main/java/org/apache/rat/annotation/ApacheV2LicenseAppender.java";
+
     private static readonly string[] Ncloc = ["ncloc"];
     private static readonly string[] NclocAndRating = ["ncloc", "sqale_rating", "new_coverage"];
 
@@ -1263,6 +1278,137 @@ public class ToolBehaviourTests
         Assert.Equal(["coverage"], result.MissingMetrics);
     }
 
+    /// <summary>
+    /// The coverage ranking over a live capture of exactly the request this tool composes.
+    /// </summary>
+    /// <remarks>
+    /// Two things it pins. <c>metricSortFilter=withMeasuresOnly</c> is what turns 340 leaf components
+    /// into the 168 this page counts — without it the files with no coverage at all rank first in a
+    /// "worst covered" list, which is the reverse of the question. And the order is SonarQube's: the
+    /// mapper walks the page and never re-sorts, so a ranking survives the round trip intact.
+    /// </remarks>
+    [Fact]
+    public async Task TheCoverageRankingKeepsTheOrderSonarQubeRankedItIn()
+    {
+        using var handler = Stub("measures-component-tree-coverage-sorted.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["coverage", "uncovered_lines", "uncovered_conditions", "ncloc"],
+            projectKey: CoverageProject,
+            sortByMetric: "coverage",
+            ascending: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/measures/component_tree", Path(handler));
+        Assert.Equal("metric", Query(handler, "s"));
+        Assert.Equal("coverage", Query(handler, "metricSort"));
+        Assert.Equal("withMeasuresOnly", Query(handler, "metricSortFilter"));
+        Assert.Equal("true", Query(handler, "asc"));
+
+        Assert.Equal(168, result.TotalCount);
+        Assert.Equal(
+            [
+                "apache-rat-plugin/src/main/java/org/apache/rat/mp/All.java",
+                "apache-rat-tasks/src/main/java/org/apache/rat/anttasks/All.java",
+                "apache-rat-plugin/src/main/java/org/apache/rat/mp/Any.java",
+                "apache-rat-tasks/src/main/java/org/apache/rat/anttasks/Any.java",
+                "apache-rat-tools/src/main/java/org/apache/rat/tools/ArgumentTypes.java",
+            ],
+            result.Components.Select(component => component.Path));
+
+        // The filter guarantees every ranked row has the sort metric, and between them the five rows
+        // carry the other three — including uncovered_conditions, which only one of them has.
+        Assert.Empty(result.MissingMetrics);
+        Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// An empty ranking is a statement about the metric that was ranked by, and about nothing else.
+    /// </summary>
+    /// <remarks>
+    /// The live failure this replaces: ranking <c>quartznet_quartznet</c> by <c>coverage</c> — a
+    /// project that publishes none — answered zero components and <c>missingMetrics</c>
+    /// <c>["coverage","ncloc"]</c>, while that project's <c>ncloc</c> is 120,338.
+    /// <c>metricSortFilter=withMeasuresOnly</c> had removed every row before any metric could appear
+    /// on one, so the diff was reporting the absence of rows as the absence of measurement.
+    /// </remarks>
+    [Fact]
+    public async Task ARankingThatFilteredEverythingOutBlamesOnlyTheMetricItRankedBy()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.ComponentTreeRankedToNothing);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["coverage", "ncloc"],
+            sortByMetric: "coverage",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Components);
+        Assert.Equal(0, result.TotalCount);
+        Assert.False(result.HasMore);
+
+        Assert.Equal(["coverage"], result.MissingMetrics);
+
+        Assert.NotNull(result.Note);
+        Assert.Contains("has a value for coverage", result.Note, StringComparison.Ordinal);
+        Assert.Contains("is not measured as zero", result.Note, StringComparison.Ordinal);
+        Assert.Contains("getComponentMeasures", result.Note, StringComparison.Ordinal);
+        Assert.Contains("listMetrics", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same empty page without a ranking keeps the ordinary diff, so the narrowing above cannot
+    /// spread to a page that is empty for some other reason.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyPageWithNoRankingStillReportsEveryRequestedMetricAsMissing()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.ComponentTreeRankedToNothing);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["coverage", "ncloc"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["coverage", "ncloc"], result.MissingMetrics);
+        Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// A blank <c>sortByMetric</c> is no ranking at all — the client refuses to send the three sort
+    /// parameters for it, so the mapper must not read the empty page as a filtered one either.
+    /// </summary>
+    [Fact]
+    public async Task ABlankSortMetricRanksNothingAndExplainsNothing()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.ComponentTreeRankedToNothing);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.ListComponentMeasuresAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            ["coverage", "ncloc"],
+            sortByMetric: "   ",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("metricSortFilter", Names(handler));
+        Assert.Equal(["coverage", "ncloc"], result.MissingMetrics);
+        Assert.Null(result.Note);
+    }
+
     // ---------------------------------------------------------------------------------------
     // getMeasuresHistory
     // ---------------------------------------------------------------------------------------
@@ -1566,6 +1712,94 @@ public class ToolBehaviourTests
 
         Assert.Empty(result.UncoveredLines);
         Assert.Contains("coverage was never measured", result.Note!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The four per-line coverage states, over one live fifteen-line window that contains all of
+    /// them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The nine lines with no <c>lineHits</c> property at all are why this fixture exists: closing
+    /// braces, blank lines and annotations sit inside a file SonarQube <em>did</em> measure, and they
+    /// are neither covered nor uncovered. Absent is not zero here either, and a mapper that read it
+    /// as zero would hand back nine lines to write tests for that no test can execute.
+    /// </para>
+    /// <para>
+    /// Line 57 is the other trap: two conditions, none of them covered, but zero hits. It is
+    /// uncovered, and it must not also be counted partial — a line nothing ran is not a line whose
+    /// branches were half-taken, and listing it twice would double-count the work.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task TheFourPerLineCoverageStatesComeApartOnALiveWindow()
+    {
+        using var handler = Stub("sources-lines-with-coverage.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            CoverageFile,
+            projectKey: CoverageProject,
+            from: 43,
+            to: 57,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal([50, 57], result.UncoveredLines);
+        Assert.Equal([43, 49], result.PartiallyCoveredLines);
+
+        // Non-executable lines in a measured file: no lineHits, so neither state applies.
+        int[] noData = [45, 46, 47, 48, 51, 53, 54, 55, 56];
+
+        Assert.All(noData, line => Assert.DoesNotContain(line, result.UncoveredLines));
+        Assert.All(noData, line => Assert.DoesNotContain(line, result.PartiallyCoveredLines));
+
+        // Fully covered lines are absent from both for a different reason, and that is fine.
+        int[] covered = [44, 52];
+
+        Assert.All(covered, line => Assert.DoesNotContain(line, result.UncoveredLines));
+        Assert.All(covered, line => Assert.DoesNotContain(line, result.PartiallyCoveredLines));
+
+        // onlyUncovered defaults to true, so lines is exactly the union of the two arrays, in order.
+        Assert.Equal([43, 49, 50, 57], result.Lines.Select(line => line.Line));
+    }
+
+    /// <summary>
+    /// Measured and clean, which is the one thing two empty arrays cannot say on their own.
+    /// </summary>
+    /// <remarks>
+    /// This range and a file SonarQube never measured produce byte-identical <c>uncoveredLines</c>
+    /// and <c>partiallyCoveredLines</c>, and they mean opposite things — so the note is the only
+    /// place the difference can live, and it now states the good outcome rather than leaving it to
+    /// be inferred from an absence.
+    /// </remarks>
+    [Fact]
+    public async Task ARangeThatIsMeasuredAndCleanSaysSoRatherThanLookingUnmeasured()
+    {
+        using var handler = Stub("sources-lines-fully-covered.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await MeasureReadTools.GetFileCoverageAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            CleanCoverageFile,
+            projectKey: CoverageProject,
+            from: 40,
+            to: 54,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.UncoveredLines);
+        Assert.Empty(result.PartiallyCoveredLines);
+        Assert.Empty(result.Lines);
+
+        Assert.NotNull(result.Note);
+        Assert.DoesNotContain("coverage was never measured", result.Note, StringComparison.Ordinal);
+        Assert.Contains("Coverage is measured for this file", result.Note, StringComparison.Ordinal);
+        Assert.Contains(
+            "no line in this range is uncovered or partially covered",
+            result.Note,
+            StringComparison.Ordinal);
     }
 
     [Fact]
