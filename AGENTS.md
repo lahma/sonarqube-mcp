@@ -228,6 +228,20 @@ from the fixture manifest.
 - **`additionalFields` on measures is `[metrics, periods]`** — `period`, singular, is a 400.
 - **A metric with no data is silently omitted** from the response. Absent is not zero. This is what
   `missingMetrics` exists for.
+- **`metricSortFilter=withMeasuresOnly` can empty the entire page, and an empty page is a fact about
+  the sort metric alone.** Ranking `measures/component_tree` by a metric the scope does not measure
+  answers `total: 0` with no components and no field saying why — `baseComponent.measures` is `[]`
+  on a successful ranking too. The requested-versus-returned diff then names *every* requested metric
+  as missing, including ones the project measures in the hundreds of thousands: verified 2026-08-22,
+  ranking `quartznet_quartznet` by `coverage` reported `missingMetrics: ["coverage","ncloc"]` while
+  its `ncloc` is 120,338. `ResultMapper.TreeMeasures` therefore takes the resolved sort metric and,
+  on an empty ranked page, reports that metric alone plus a note that names `getComponentMeasures`.
+- **`asc=false` means largest-first, which is the worst end only where more is worse.** For
+  `uncovered_lines`, `complexity`, `ncloc` and `duplicated_lines_density` the default direction gives
+  the worst files; for `coverage` and every other higher-is-better metric it gives the best ones —
+  live, the default coverage ranking returned five files at 100%. `listComponentMeasures`' tool
+  description and its `ascending` parameter therefore state the *rule* rather than asserting that the
+  default is "worst first".
 - **New-code values live in `periods[].value`**, never in `value`. A tool that reads `value` reports
   the overall number as if it were the new-code number.
 - **Measure values are always strings**, including for `INT` and `PERCENT`, and `*_rating` `"1.0"`
@@ -361,14 +375,26 @@ Complete, as of the initial implementation. Versions are centrally pinned in
   no token cache means nothing to encrypt at rest.
 - `tests/`: `xunit.v3`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`. No mocking or
   assertion libraries — use the hand-rolled `StubHttpMessageHandler`.
-- `build/`: `Fallout.Common` + `Fallout.Components` 10.4.0 (the build project opts out of CPM).
+- `build/`: `Fallout.Common` + `Fallout.Components` 10.4.0, plus `NuGet.Frameworks` 7.9.0 (see
+  *Package budget changes*). The build project opts out of CPM.
 
 SourceLink needs no package reference — it is in-SDK on .NET 8 and later.
 
 ### Package budget changes
 
-_None yet._ The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives
-with `Fallout.Common` 10.4.0 as a transitive dependency — no new `PackageReference` anywhere, and
+**2026-08-22 — `NuGet.Frameworks` 7.9.0, `build/_build.csproj` only.** .NET SDK 10.0.400 binds
+`NuGet.Frameworks, Version=7.9.0.0` by strong name inside the build process whenever Fallout's
+`ITest` evaluates a test project in-process — which it does only when `GITHUB_ACTIONS` is set, so
+the failure is invisible locally. Fallout 10.4.0 brings 6.14.3 transitively through
+`NuGet.Packaging` and the app-local copy shadows the SDK's, so every CI `Test` run threw
+`InvalidProjectFileException`. Nothing already referenced can supply 7.9.0.0 — Fallout's own
+`NuGet.Packaging` pin is the source of the older one — and pinning forward is safe in both
+directions because the runtime accepts a higher assembly version than the one requested. Nothing
+is added to `src/` or `tests/`: the production budget stays at three. Remove once Fallout ships a
+`NuGet.Packaging` new enough to bring 7.9.0 in on its own (Fallout-build/Fallout#638).
+
+The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
+`Fallout.Common` 10.4.0 as a transitive dependency — no new `PackageReference` anywhere, and
 nothing added to `src/` or `tests/`.
 
 ## Layout
@@ -449,6 +475,12 @@ their provenance recorded in `Fixtures/MANIFEST.md` (JSON cannot carry comments,
 where a capture's URL and date live). Because `JsonSerializerIsReflectionEnabledByDefault=false` is
 set in the test csproj as well (D7), a type missing from a `JsonSerializerContext` fails under
 `dotnet test` rather than only after an AOT publish.
+
+Almost every fixture comes from `quartznet_quartznet`. **Three do not**, and the reason is worth
+knowing before anyone tidies them: that project publishes no coverage report, so no request against
+it can produce a `lineHits`, a `conditions` or a coverage-ranked component tree. The three
+coverage-bearing shapes were captured anonymously from the public `apache_creadur-rat` instead. They
+are response bodies, so the foreign project key inside them is data and nothing in the code notices.
 
 Some rules are too easy to break silently to be left to review, so tests enforce them by reflection
 or by scanning the source tree. Do not delete one to make a change pass:
