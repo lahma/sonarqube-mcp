@@ -131,6 +131,7 @@ The checkout is free and instant; every tool here is a network round trip.
   `getHotspot` reports `canChangeStatus` before the attempt.
 - **429.** The client already retried with backoff, so one that reaches you means slow down: fewer
   metrics per call, a smaller `pageSize`, a narrower search.
-- **A rule with no description sections.** The account is not entitled to read rule descriptions;
-  the `note` says so. The name, impacts and clean-code attribute are still returned, and the issue's
-  own message is usually enough to act on.
+- **A rule with no description sections.** The server has no token — SonarQube sends rule
+  descriptions only to authenticated requests, and the `note` says so. Do not retry; the name,
+  impacts and clean-code attribute are still returned, and the issue's own message is usually enough
+  to act on.

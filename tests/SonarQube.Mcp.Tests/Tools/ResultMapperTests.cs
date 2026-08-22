@@ -214,35 +214,72 @@ public class ResultMapperTests
     public void HotspotReviewCommentsAreReadFromTheSingularProperty()
     {
         var show = JsonSerializer.Deserialize(
-            ToolPayloads.HotspotShowWithComment,
+            SonarFixtures.Read("hotspots-show-with-comment.json"),
             SonarWireJsonContext.Default.HotspotShowResponseDto)!;
 
         var detail = ResultMapper.Hotspot(show, BaseUrl);
 
         var comment = Assert.Single(detail.Comments);
 
-        Assert.Equal("AZ_0000000000000000009", comment.Key);
-        Assert.Equal("Reviewed: the value is a placeholder.", comment.Text);
+        Assert.Equal("AaAoPgsRCRl6zX9b36TK", comment.Key);
+        Assert.Equal("sonarqube-mcp verification - restored to original state", comment.Text);
         Assert.Equal("lahma@github", comment.Author);
+    }
 
+    /// <summary>
+    /// The other half of C8, which no capture can carry: SonarQube never sends the plural spelling,
+    /// so the only way to prove it is not read is to send both and watch the plural be ignored.
+    /// </summary>
+    [Fact]
+    public void APluralCommentsPropertyOnAHotspotIsIgnored()
+    {
+        var show = JsonSerializer.Deserialize(
+            ToolPayloads.HotspotShowWithBothCommentSpellings,
+            SonarWireJsonContext.Default.HotspotShowResponseDto)!;
+
+        var detail = ResultMapper.Hotspot(show, BaseUrl);
+
+        Assert.Equal("the singular property", Assert.Single(detail.Comments).Text);
         Assert.DoesNotContain(detail.Comments, entry => entry.Key == "ignored");
     }
 
+    /// <summary>
+    /// A live changelog, which is richer than the obvious shape in two ways: a status change carries
+    /// <em>two</em> diffs (status and resolution move together), and a diff that clears a value has
+    /// an <c>oldValue</c> with no <c>newValue</c>. The first entry is SonarQube's own severity
+    /// recalculation and has no user at all.
+    /// </summary>
     [Fact]
     public void AHotspotsReviewHistoryIsMappedFieldByField()
     {
         var show = JsonSerializer.Deserialize(
-            ToolPayloads.HotspotShowWithComment,
+            SonarFixtures.Read("hotspots-show-with-comment.json"),
             SonarWireJsonContext.Default.HotspotShowResponseDto)!;
 
-        var entry = Assert.Single(ResultMapper.Hotspot(show, BaseUrl).Changelog);
-        var change = Assert.Single(entry.Changes);
+        var changelog = ResultMapper.Hotspot(show, BaseUrl).Changelog;
 
-        Assert.Equal("lahma@github", entry.User);
-        Assert.Equal("Marko Lahma", entry.UserName);
-        Assert.Equal("status", change.Field);
-        Assert.Equal("TO_REVIEW", change.OldValue);
-        Assert.Equal("REVIEWED", change.NewValue);
+        var automatic = changelog[0];
+        Assert.Null(automatic.User);
+        Assert.Null(automatic.UserName);
+        Assert.Equal("severity", Assert.Single(automatic.Changes).Field);
+
+        var review = changelog[1];
+        Assert.Equal("lahma@github", review.User);
+        Assert.Equal("Marko Lahma", review.UserName);
+
+        var status = review.Changes.Single(change => change.Field == "status");
+        Assert.Equal("TO_REVIEW", status.OldValue);
+        Assert.Equal("REVIEWED", status.NewValue);
+
+        // Set, so there is a newValue and nothing before it.
+        var resolution = review.Changes.Single(change => change.Field == "resolution");
+        Assert.Null(resolution.OldValue);
+        Assert.Equal("SAFE", resolution.NewValue);
+
+        // Cleared, which is the mirror image: an oldValue and no newValue.
+        var cleared = changelog[2].Changes.Single(change => change.Field == "resolution");
+        Assert.Equal("SAFE", cleared.OldValue);
+        Assert.Null(cleared.NewValue);
     }
 
     /// <summary>
@@ -303,7 +340,7 @@ public class ResultMapperTests
 
         Assert.Equal(["confirm"], withReRead.AvailableTransitions);
         Assert.Equal(["reopen"], withoutReRead.AvailableTransitions);
-        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", withReRead.File);
+        Assert.Equal("src/Quartz.HttpClient/QuartzHttpClientServiceCollectionExtensions.cs", withReRead.File);
     }
 
     /// <summary>
@@ -321,8 +358,13 @@ public class ResultMapperTests
         Assert.Null(result.CommentKey);
     }
 
+    /// <summary>
+    /// <c>add_comment</c> answers with every comment on the issue, not with the one just posted, so
+    /// the mapper has to pick. On the live capture — two comments, posted three seconds apart — the
+    /// newest is the second.
+    /// </summary>
     [Fact]
-    public void TheNewestCommentIsChosenByTimestampRatherThanByPosition()
+    public void TheCommentReportedBackIsTheNewestOneOnTheIssue()
     {
         var response = JsonSerializer.Deserialize(
             SonarFixtures.Read("issues-add_comment.json"),
@@ -330,8 +372,37 @@ public class ResultMapperTests
 
         var result = ResultMapper.Comment(response, "ignored", BaseUrl);
 
-        Assert.Equal("AZ_0000000000000000002", result.CommentKey);
-        Assert.Equal("Fixed by the naming pass.", result.Text);
+        Assert.Equal(2, response.Issue!.Comments!.Count);
+        Assert.Equal("AaAoPByOjn1jm7-NQYn-", result.CommentKey);
+        Assert.Equal("sonarqube-mcp wire capture 2 - removing shortly", result.Text);
+    }
+
+    /// <summary>
+    /// And it picks by timestamp, not by position. SonarQube happens to answer in ascending order,
+    /// which is exactly why this cannot be tested with a capture: the payload below is the same two
+    /// comments listed the other way round, and the answer must not change.
+    /// </summary>
+    [Fact]
+    public void TheNewestCommentIsChosenByTimestampRatherThanByPosition()
+    {
+        var response = JsonSerializer.Deserialize(
+            """
+            {
+              "issue": {
+                "key": "AaAmMrFelhOWn70x31R7",
+                "comments": [
+                  { "key": "NEWER", "markdown": "second", "createdAt": "2026-08-22T09:50:23+0000" },
+                  { "key": "OLDER", "markdown": "first", "createdAt": "2026-08-22T09:50:20+0000" }
+                ]
+              }
+            }
+            """,
+            SonarWireJsonContext.Default.IssueOperationResponseDto)!;
+
+        var result = ResultMapper.Comment(response, "ignored", BaseUrl);
+
+        Assert.Equal("NEWER", result.CommentKey);
+        Assert.Equal("second", result.Text);
     }
 
     /// <summary>

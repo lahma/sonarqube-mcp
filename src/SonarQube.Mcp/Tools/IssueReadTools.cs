@@ -226,9 +226,11 @@ internal sealed class IssueReadTools
     [Description(
         "Explains one rule: what it flags, why it matters, and how to fix it, with the HTML converted to text " +
         "and code fenced. Call it once per distinct rule when triaging - the explanation is the same for every " +
-        "issue that rule raised, so fetching it per issue wastes context. Sections are capped and truncation is " +
-        "marked. If the response comes back with no sections at all, the account is not entitled to read rule " +
-        "descriptions; the note says so and the rule's name and impacts are still returned.")]
+        "issue that rule raised, so fetching it per issue wastes context. Sections come back in the order they " +
+        "were asked for, and a rule with per-framework fix guidance returns how_to_fix once per context. " +
+        "Sections are capped and truncation is marked. If the response has no sections at all, this server is " +
+        "running without a token - SonarQube sends rule descriptions only to authenticated requests; the note " +
+        "says so and the rule's name and impacts are still returned.")]
     public static async Task<RuleDetail> GetRuleAsync(
         SonarApiClient client,
         SonarQubeMcpOptions options,

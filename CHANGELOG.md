@@ -32,7 +32,11 @@ Initial release.
   duplicated lines — the one thing SonarQube knows that a checkout does not. The syntax-highlighted
   source the API sends is deliberately dropped; the file is on disk.
 - `getRule` converts a rule's HTML description sections to text with code fenced, capped, and
-  truncation marked rather than silent.
+  truncation marked rather than silent. Sections come back in the order they were asked for, and a
+  rule with per-framework fix guidance returns `how_to_fix` once per context. The descriptions
+  themselves need a token — SonarQube Cloud sends them only to an authenticated request — so a
+  tokenless server returns the rule's name, impacts and clean-code attribute with a note explaining
+  the gap instead of failing.
 - Errors are translated into instructions: a missing token names `SONARQUBE_TOKEN` and where to
   create one, a 404 explains that a project key is not a repository name, a 404 from the sources
   endpoints explains that it can also mean a missing permission, the 10,000-result cap becomes

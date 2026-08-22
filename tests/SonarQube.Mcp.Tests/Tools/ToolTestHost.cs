@@ -218,52 +218,28 @@ internal static class ToolPayloads
     internal const string NoRules = """{"total":0,"p":1,"ps":1,"rules":[]}""";
 
     /// <summary>
-    /// A hotspot read back with one review comment. The wire property is <c>comment</c>, singular;
-    /// the plural spelling below it is what SonarQube never sends and must therefore be ignored.
+    /// C8's trap, written by hand because SonarQube cannot produce it: the wire property is
+    /// <c>comment</c>, singular, and the plural spelling beside it is the one a reader reaches for
+    /// first. A capture proves the singular property is read
+    /// (<c>Fixtures/hotspots-show-with-comment.json</c>); only a payload carrying <em>both</em> can
+    /// prove the plural is not.
     /// </summary>
-    internal const string HotspotShowWithComment = """
+    internal const string HotspotShowWithBothCommentSpellings = """
         {
           "key": "AZvu8ZyfNsnCVHe5poFs",
-          "component": {
-            "key": "quartznet_quartznet:src/Quartz.Examples.AspNetCore/appsettings.json",
-            "qualifier": "FIL",
-            "name": "appsettings.json",
-            "path": "src/Quartz.Examples.AspNetCore/appsettings.json"
-          },
           "project": { "key": "quartznet_quartznet", "qualifier": "TRK", "name": "quartznet" },
-          "rule": {
-            "key": "json:S2068",
-            "name": "Credentials should not be hard-coded",
-            "securityCategory": "auth",
-            "vulnerabilityProbability": "HIGH",
-            "riskDescription": "<p>Hard-coded credentials are a risk.</p>",
-            "vulnerabilityDescription": "<p>An attacker can read the binary.</p>",
-            "fixRecommendations": "<pre><code>secret = env(\"SECRET\")</code></pre>"
-          },
           "status": "REVIEWED",
           "resolution": "SAFE",
-          "line": 11,
-          "message": "\"Password\" detected here, make sure this is not a hard-coded credential.",
-          "assignee": "lahma@github",
           "comments": [ { "key": "ignored", "markdown": "the plural spelling is not what SonarQube sends" } ],
           "comment": [
             {
-              "key": "AZ_0000000000000000009",
+              "key": "AaAoPgsRCRl6zX9b36TK",
               "login": "lahma@github",
-              "htmlText": "Reviewed: the value is a placeholder.",
-              "markdown": "Reviewed: the value is a placeholder.",
-              "createdAt": "2026-08-11T18:20:00+0000"
+              "htmlText": "the singular property",
+              "markdown": "the singular property",
+              "createdAt": "2026-08-22T06:52:29+0000"
             }
-          ],
-          "changelog": [
-            {
-              "user": "lahma@github",
-              "userName": "Marko Lahma",
-              "creationDate": "2026-08-11T18:20:00+0000",
-              "diffs": [ { "key": "status", "oldValue": "TO_REVIEW", "newValue": "REVIEWED" } ]
-            }
-          ],
-          "canChangeStatus": true
+          ]
         }
         """;
 

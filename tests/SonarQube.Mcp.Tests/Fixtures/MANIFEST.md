@@ -12,6 +12,14 @@ normalisation applied is CRLF → LF and a trailing newline.
 Two fixtures the design expected to be synthetic turned out to be capturable, and one it expected
 to be capturable turned out to need no file at all. Both are noted below.
 
+The six fixtures in the second table were captured on **2026-08-22** with a **SonarQube Cloud user
+token** (login `lahma@github`, an owner of the `quartznet` organization), because none of them can
+be obtained without one: three are write responses, two are rule descriptions that an anonymous
+request is not given, and one is a hotspot carrying a review comment. Their one extra normalisation
+is that the issue and hotspot `author` field — the SCM author of the line, which the anonymous
+captures do not carry at all — was replaced with `author@example.com`. Nothing in the codebase reads
+it, and a personal email address does not need a second home in a public repository.
+
 ## Live captures — 2026-08-11
 
 | Fixture | Request | Notes |
@@ -20,7 +28,7 @@ to be capturable turned out to need no file at all. Both are noted below.
 | `issues-search-empty.json` | `GET api/issues/search?componentKeys=quartznet_quartznet&ps=2&p=1&additionalFields=rules&tags=this-tag-does-not-exist-anywhere` | Empty result, both paging shapes, `total: 0`. |
 | `issues-search-single.json` | `GET api/issues/search?issues=AZ_xePOumT_q4T_1FWf8&additionalFields=transitions,comments,rules,users&ps=1` | The `getIssue` shape. `transitions` and `comments` are both `[]` — anonymously there are no legal transitions, which is itself the degraded case the tool layer has to render. |
 | `hotspots-search-page.json` | `GET api/hotspots/search?projectKey=quartznet_quartznet&ps=2&p=1` | `component`/`project` are **strings**; `assignee` is a **UUID** (`AYgE5F7pEoXHSow6lKjD`). |
-| `hotspots-show.json` | `GET api/hotspots/show?hotspot=AZvu8ZyfNsnCVHe5poFs` | `component`/`project` are **objects**; `assignee` is a **login** (`lahma@github`); the comments array is spelled **`comment`**, singular; carries a `users[]` sidecar and `canChangeStatus: false`. |
+| `hotspots-show.json` | `GET api/hotspots/show?hotspot=AZvu8ZyfNsnCVHe5poFs` | `component`/`project` are **objects**; `assignee` is a **login** (`lahma@github`); the comments array is spelled **`comment`**, singular; carries a `users[]` sidecar and `canChangeStatus: false`. **Re-capturing this will not match**: on 2026-08-22 the verification below left one review comment and four changelog entries on that hotspot, which no API can remove. The file is kept as captured because the empty `comment` array and the anonymous `canChangeStatus: false` are what it is here to show. |
 | `measures-component.json` | `GET api/measures/component?component=quartznet_quartznet&metricKeys=ncloc,coverage,new_coverage,sqale_rating&additionalFields=periods` | **The silent-omission case.** Four metrics requested, two returned: `coverage` and `new_coverage` are simply absent, not zero. Also shows `sqale_rating: "1.0"` (meaning A) and `component.id` rather than `component.uuid`. |
 | `measures-component-periods.json` | `GET api/measures/component?component=quartznet_quartznet&pullRequest=3267&metricKeys=new_coverage,new_violations,coverage&additionalFields=periods` | The new-code case: `new_violations` arrives as `periods:[{index:1,value:"13"}]` with **no** `value` property at all. |
 | `measures-component-tree.json` | `GET api/measures/component_tree?component=quartznet_quartznet&metricKeys=ncloc,complexity&strategy=leaves&qualifiers=FIL&ps=2&p=1&s=metric&metricSort=ncloc&metricSortFilter=withMeasuresOnly&asc=false` | The metric-sorted "worst files" query. |
@@ -33,30 +41,42 @@ to be capturable turned out to need no file at all. Both are noted below.
 | `project-branches-list.json` | `GET api/project_branches/list?project=quartznet_quartznet` | Not paginated. The main branch's `status` has the three issue counts and **no** `qualityGateStatus`. |
 | `project-pull-requests-list.json` | `GET api/project_pull_requests/list?project=quartznet_quartznet` | **Trimmed.** The endpoint takes no paging parameter and returned all 116 analysed pull requests (90 KB); the first two entries are kept verbatim and re-wrapped in `{"pullRequests":[…]}`. Nothing inside an entry was altered. Between them they cover both `qualityGateStatus` values. |
 | `sources-lines.json` | `GET api/sources/lines?key=quartznet_quartznet%3Asrc%2FQuartz%2FCore%2FQuartzScheduler.cs&from=940&to=945` | **Live, not synthetic** (the design warned this might 404 anonymously; it does not — `api/sources/raw` is the one that 404s). `code` is syntax-highlighted HTML. `lineHits`/`conditions`/`coveredConditions` are absent because this project publishes no coverage. |
-| `rules-search-rule-key.json` | `GET api/rules/search?organization=quartznet&rule_key=csharpsquid:S2259&f=descriptionSections,name,cleanCodeAttribute,impacts,repo,langName,securityStandards,tags&ps=1` | **The degraded anonymous response**: the `f` list is accepted, the request succeeds, and `descriptionSections` is simply not in the answer. `requiredEntitlements: []` is present. Flat paging only. |
+| `rules-search-rule-key.json` | `GET api/rules/search?organization=quartznet&rule_key=csharpsquid:S2259&f=descriptionSections,name,cleanCodeAttribute,impacts,repo,langName,securityStandards,tags&ps=1` | **The degraded anonymous response**: the `f` list is accepted, the request succeeds, and `descriptionSections` is simply not in the answer. `requiredEntitlements: []` is present. Flat paging only. `rules-search-with-sections.json` below is the identical request with a token, and it does have the sections — the pair is what closes C1. |
 | `error-400-page-size.json` | `GET api/issues/search?componentKeys=quartznet_quartznet&ps=501` | `'ps' value (501) must be less than 500`. |
 | `error-400-result-cap.json` | `GET api/issues/search?componentKeys=quartznet_quartznet&ps=100&p=101` | `Can return only the first 10000 results. 10100th result asked.` |
 | `error-401-authentication-required.json` | `GET api/projects/search?organization=quartznet&ps=1` | The **no-credential** 401: `{"errors":[{"msg":"Authentication is required"}]}`. Also the proof that `projects/search` needs org-admin, which is why `components/search` is the list-projects endpoint. |
 | `error-404-component-not-found.json` | `GET api/measures/component?component=quartznet_quartznet:no/such/File.cs&metricKeys=ncloc` | `Component key 'quartznet_quartznet:no/such/File.cs' not found`. |
 | `error-401-empty-body.txt` | `GET api/issues/search?…` with `Authorization: Bearer squ_0000…` | Not JSON, and not a response body: a **bad-token** 401 has `Content-Length: 0` and no body at all. The file records the exchange so the difference from the row above is written down somewhere. |
 
-## SYNTHETIC — hand-written, replace in Phase F
+## Authenticated live captures — 2026-08-22
 
-These four need a token with issue-administration rights on a scratch project, which Phase B does
-not have. Each is written to the wire shape the API documents and the live read fixtures confirm —
-`issues/do_transition`, `issues/assign` and `issues/add_comment` all answer with the *same*
-`{issue, components, rules, users}` envelope — using real keys and real component paths from the
-live captures so nothing about them is shaped differently from a genuine response.
+Captured with a user token, and with the `author` normalisation described above. The three write
+responses come from one issue — `AaAmMrFelhOWn70x31R7`, an open `csharpsquid:S8970` code smell in
+`src/Quartz.HttpClient/QuartzHttpClientServiceCollectionExtensions.cs` — which was transitioned,
+assigned, commented on and then put back exactly as it was found. Every comment those captures
+created was deleted afterwards through `api/issues/delete_comment`; the issue's `status` reads
+`REOPENED` rather than `OPEN` because that is SonarQube's own record of the reopen, and there is no
+way to erase it.
 
-| Fixture | Stands in for | Why it cannot be captured yet |
+Note that this is a **different issue** from the one the anonymous read fixtures use
+(`AZ_xePOumT_q4T_1FWf8`): the write leg needed an issue that was still open, still trivial, and
+still transitionable at capture time.
+
+| Fixture | Request | Notes |
 |---|---|---|
-| `issues-do_transition.json` | `POST api/issues/do_transition` (`transition=accept`) | Needs `Administer Issues` on the project. Shows the accepted state: `issueStatus: ACCEPTED`, legacy `status: RESOLVED` + `resolution: WONTFIX`, and `transitions: ["reopen"]`. |
-| `issues-assign.json` | `POST api/issues/assign` | Same permission. |
-| `issues-add_comment.json` | `POST api/issues/add_comment` | Same permission. Two comments, so "the newest one is the one just posted" is testable. |
-| `rules-search-with-sections.json` | `GET api/rules/search?rule_key=…&f=descriptionSections,…` **with an entitled token** | Whether an ordinary authenticated token gets `descriptionSections` at all is **unproven** — see the live `rules-search-rule-key.json`, which does not. This fixture is what the tool layer's non-degraded path is written against; if Phase F finds that no ordinary token gets sections either, this fixture and that path both go. It includes a section with a `context`, which is the shape a multi-framework rule uses. |
+| `issues-do_transition.json` | `POST api/issues/do_transition` with `issue=AaAmMrFelhOWn70x31R7&transition=accept` | The accepted state, exactly as the design predicted it: modern `issueStatus: ACCEPTED`, legacy `status: RESOLVED` + `resolution: WONTFIX`, and `transitions: ["reopen"]` — reopen is the only way back, which is the whole argument for the tool's non-destructive annotation. The envelope is `{issue, components, rules, users}`. |
+| `issues-assign.json` | `POST api/issues/assign` with `issue=AaAmMrFelhOWn70x31R7&assignee=lahma%40github` | **Re-applying the assignee the issue already had**, which is what makes it the live proof that `assignIssue` is idempotent: `200`, same state, no error. Same envelope. |
+| `issues-add_comment.json` | `POST api/issues/add_comment` with `issue=AaAmMrFelhOWn70x31R7&text=…` | The response of the **second** of two comments posted three seconds apart, so it carries both — the endpoint answers with every comment on the issue, not with the one just posted, and the mapper has to pick. Ascending by `createdAt`; the comment objects carry an `isFeedback` flag the DTO ignores. Both comments were deleted after capture. |
+| `hotspots-show-with-comment.json` | `GET api/hotspots/show?hotspot=AZvu8ZyfNsnCVHe5poFs` | The same hotspot as `hotspots-show.json`, read back after a `REVIEWED`/`SAFE` review: `canChangeStatus` is now **`true`** (it is `false` anonymously), the `comment` array — singular, C8 — has a real entry, and the `changelog` is four entries deep. Worth reading before changing the changelog mapper: a status change carries **two** diffs (`status` and `resolution` move together), a diff that *sets* a value has `newValue` and no `oldValue` while one that *clears* it has the reverse, and the oldest entry is SonarQube's own severity recalculation with **no `user` at all**. |
+| `rules-search-with-sections.json` | `GET api/rules/search?organization=quartznet&rule_key=csharpsquid:S2259&f=descriptionSections,name,cleanCodeAttribute,impacts,repo,langName,securityStandards,tags&ps=1` | **C1, closed.** Byte for byte the same request as the anonymous `rules-search-rule-key.json` above; the only difference is the `Authorization` header, and this one has `descriptionSections`. So the empty response is an anonymous-access restriction, not an entitlement and not a parameter error. The wire order is `how_to_fix, root_cause, resources` — there is no `introduction`, and no section carries a `context`. |
+| `rules-search-with-contexts.json` | `GET api/rules/search?organization=quartznet&rule_key=javasecurity:S2076&f=…&ps=1` (same `f` list) | The per-framework shape, which `csharpsquid:S2259` does not have: `how_to_fix` appears **twice**, once per `context` (`java_lang_package` / *Java Lang Package*, `apache_commons` / *Apache Commons*), while `root_cause` and `resources` carry none. A Java rule because no C# rule in this organization's profiles has contexts. |
 
 **`hotspots/change_status` has no fixture.** It answers `204` with no body, so there is nothing to
 store; a test that needs it enqueues a bodiless 204, which is precisely what the wire carries.
+
+**The plural `comments` spelling has no fixture either**, and cannot have one: SonarQube never sends
+it. `ToolPayloads.HotspotShowWithBothCommentSpellings` carries both spellings by hand, because the
+only way to prove the plural is ignored is to send it.
 
 ## Corrections to the implementation design found while capturing
 

@@ -463,12 +463,13 @@ instead of paging through everything.
 a metric it has no data for, so absent means *not measured* — never zero. Check the key against
 `listMetrics`: a key that does not exist produces exactly the same silence.
 
-**`getRule` returns no description sections.** Observed anonymously, where the rule came back
-carrying a `requiredEntitlements` field, which suggests rule descriptions need an entitlement the
-account did not have. This is **not proven** — it may behave differently with a paid plan or a
-different token — so the tool degrades rather than fails: `sections` is empty, a `note` says what
-happened, and the rule's name, impacts and clean-code attribute are still returned. If you see this
-with a token that should be entitled, the issue's own message is usually enough to act on.
+**`getRule` returns no description sections.** The server is running without a token. SonarQube
+Cloud sends rule descriptions only to an authenticated request: the identical call answers with no
+`descriptionSections` anonymously and with the full text when any ordinary user token is attached
+(verified against sonarcloud.io). Set `SONARQUBE_TOKEN` and restart the server — `sonarqube-mcp
+status` will tell you whether it is set and whether it is accepted. Until then the tool degrades
+rather than fails: `sections` is empty, a `note` says why, and the rule's name, impacts and
+clean-code attribute are still returned.
 
 **Nothing works and you want to see why.** `SONARQUBE_MCP_LOG_LEVEL=Debug`. All logging goes to
 stderr; MCP clients usually surface it in a server log pane.

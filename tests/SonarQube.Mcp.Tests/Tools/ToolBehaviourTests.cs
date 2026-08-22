@@ -35,6 +35,23 @@ public class ToolBehaviourTests
     private const string IssueKey = "AZ_xePOumT_q4T_1FWf8";
     private const string HotspotKey = "AZvu8ZyfNsnCVHe5poFs";
 
+    /// <summary>
+    /// The issue the three write fixtures were captured from. A different issue from
+    /// <see cref="IssueKey"/> on purpose: the read fixtures were captured anonymously months earlier,
+    /// and the writes needed an issue that was still OPEN and trivial enough to transition and put
+    /// back. See <c>Fixtures/MANIFEST.md</c>.
+    /// </summary>
+    private const string WriteIssueKey = "AaAmMrFelhOWn70x31R7";
+
+    /// <summary>The file <see cref="WriteIssueKey"/> is in, as the write fixtures' components report it.</summary>
+    private const string WriteIssueFile = "src/Quartz.HttpClient/QuartzHttpClientServiceCollectionExtensions.cs";
+
+    /// <summary>The newest comment in <c>issues-add_comment.json</c> — the one that capture posted.</summary>
+    private const string WriteCommentKey = "AaAoPByOjn1jm7-NQYn-";
+
+    /// <summary>The text of <see cref="WriteCommentKey"/>, so request and response describe one call.</summary>
+    private const string WriteCommentText = "sonarqube-mcp wire capture 2 - removing shortly";
+
     private static readonly string[] Ncloc = ["ncloc"];
     private static readonly string[] NclocAndRating = ["ncloc", "sqale_rating", "new_coverage"];
 
@@ -731,8 +748,14 @@ public class ToolBehaviourTests
     // getRule
     // ---------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// The default sections are asked for in reading order — what it is, why, how to fix it — and
+    /// that is the order they come back in, whatever order the API listed them. This rule has no
+    /// <c>introduction</c>, so a section that was asked for and does not exist is simply absent
+    /// rather than empty.
+    /// </summary>
     [Fact]
-    public async Task GetRuleReturnsTheThreeSectionsWorthReadingInTheOrderTheyAreRead()
+    public async Task GetRuleReturnsTheRequestedSectionsInTheOrderTheyAreRead()
     {
         using var handler = Stub("rules-search-with-sections.json");
         using var client = ToolTestHost.CreateClient(handler);
@@ -749,16 +772,42 @@ public class ToolBehaviourTests
         Assert.Equal("1", Query(handler, "ps"));
         Assert.Contains("descriptionSections", Query(handler, "f")!, StringComparison.Ordinal);
 
-        Assert.Equal(
-            ["introduction", "root_cause", "how_to_fix"],
-            result.Sections.Select(section => section.Key));
+        // The capture lists how_to_fix first; the requested order wins, and the introduction the
+        // defaults ask for is not one this rule has.
+        Assert.Equal(["root_cause", "how_to_fix"], result.Sections.Select(section => section.Key));
 
         // The HTML is gone and the code sample is fenced.
-        Assert.DoesNotContain("<pre", result.Sections[1].Content!, StringComparison.Ordinal);
-        Assert.Contains("```", result.Sections[1].Content!, StringComparison.Ordinal);
-        Assert.Equal("C#", result.Sections[2].Context);
+        Assert.DoesNotContain("<pre", result.Sections[0].Content!, StringComparison.Ordinal);
+        Assert.Contains("```", result.Sections[0].Content!, StringComparison.Ordinal);
+        Assert.All(result.Sections, section => Assert.Null(section.Context));
         Assert.False(result.Truncated);
         Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// A rule with per-framework fix guidance answers <c>how_to_fix</c> once per context, and both
+    /// copies are returned: the context is the only thing that distinguishes them, so dropping it
+    /// would leave two identical-looking sections with different advice.
+    /// </summary>
+    [Fact]
+    public async Task GetRuleKeepsEveryContextOfAPerFrameworkSection()
+    {
+        using var handler = Stub("rules-search-with-contexts.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "javasecurity:S2076",
+            sections: ["how_to_fix"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["how_to_fix", "how_to_fix"], result.Sections.Select(section => section.Key));
+
+        // The display name, not the key: it is what the section header would read in the UI.
+        Assert.Equal(
+            ["Java Lang Package", "Apache Commons"],
+            result.Sections.Select(section => section.Context));
     }
 
     [Fact]
@@ -1603,7 +1652,7 @@ public class ToolBehaviourTests
         var result = await IssueWriteTools.TransitionIssueAsync(
             client,
             ToolTestHost.CreateOptions(),
-            IssueKey,
+            WriteIssueKey,
             "accept",
             comment: "Intentional here.",
             cancellationToken: TestContext.Current.CancellationToken);
@@ -1613,12 +1662,15 @@ public class ToolBehaviourTests
         Assert.Equal(HttpMethod.Post, request.Method);
         Assert.Equal("/api/issues/do_transition", RequestUrl.Path(request.Uri));
         Assert.Equal("application/x-www-form-urlencoded", request.Headers["Content-Type"]);
-        Assert.Equal($"issue={IssueKey}&transition=accept&comment=Intentional+here.", request.Body);
+        Assert.Equal($"issue={WriteIssueKey}&transition=accept&comment=Intentional+here.", request.Body);
 
+        // Live-captured: accept lands as the modern ACCEPTED plus the legacy RESOLVED/WONTFIX pair,
+        // and reopen is the only transition left.
         Assert.Equal("ACCEPTED", result.IssueStatus);
+        Assert.Equal("RESOLVED", result.Status);
         Assert.Equal("WONTFIX", result.Resolution);
         Assert.Equal(["reopen"], result.AvailableTransitions);
-        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", result.File);
+        Assert.Equal(WriteIssueFile, result.File);
     }
 
     /// <summary>
@@ -1676,11 +1728,11 @@ public class ToolBehaviourTests
         _ = await IssueWriteTools.TransitionIssueAsync(
             client,
             ToolTestHost.CreateOptions(),
-            IssueKey,
+            WriteIssueKey,
             "WontFix",
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal($"issue={IssueKey}&transition=wontfix", Assert.Single(handler.Requests).Body);
+        Assert.Equal($"issue={WriteIssueKey}&transition=wontfix", Assert.Single(handler.Requests).Body);
     }
 
     [Fact]
@@ -1713,16 +1765,16 @@ public class ToolBehaviourTests
         var result = await IssueWriteTools.AssignIssueAsync(
             client,
             ToolTestHost.CreateOptions(),
-            IssueKey,
+            WriteIssueKey,
             "lahma@github",
             cancellationToken: TestContext.Current.CancellationToken);
 
         var request = Assert.Single(handler.Requests);
 
         Assert.Equal("/api/issues/assign", RequestUrl.Path(request.Uri));
-        Assert.Equal($"issue={IssueKey}&assignee=lahma%40github", request.Body);
+        Assert.Equal($"issue={WriteIssueKey}&assignee=lahma%40github", request.Body);
         Assert.Equal("lahma@github", result.Assignee);
-        Assert.Equal("src/Quartz/Core/QuartzScheduler.cs", result.File);
+        Assert.Equal(WriteIssueFile, result.File);
     }
 
     /// <summary>
@@ -1738,10 +1790,10 @@ public class ToolBehaviourTests
         _ = await IssueWriteTools.AssignIssueAsync(
             client,
             ToolTestHost.CreateOptions(),
-            IssueKey,
+            WriteIssueKey,
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal($"issue={IssueKey}&assignee=", Assert.Single(handler.Requests).Body);
+        Assert.Equal($"issue={WriteIssueKey}&assignee=", Assert.Single(handler.Requests).Body);
     }
 
     [Fact]
@@ -1753,18 +1805,23 @@ public class ToolBehaviourTests
         var result = await IssueWriteTools.AddIssueCommentAsync(
             client,
             ToolTestHost.CreateOptions(),
-            IssueKey,
-            "Fixed by the naming pass.",
+            WriteIssueKey,
+            WriteCommentText,
             cancellationToken: TestContext.Current.CancellationToken);
 
         var request = Assert.Single(handler.Requests);
 
         Assert.Equal("/api/issues/add_comment", RequestUrl.Path(request.Uri));
-        Assert.Equal($"issue={IssueKey}&text=Fixed+by+the+naming+pass.", request.Body);
+        Assert.Equal(
+            $"issue={WriteIssueKey}&text=sonarqube-mcp+wire+capture+2+-+removing+shortly",
+            request.Body);
 
-        // The newest by timestamp, not the last in the array: the response order is not contractual.
-        Assert.Equal("AZ_0000000000000000002", result.CommentKey);
-        Assert.Equal("Fixed by the naming pass.", result.Text);
+        // The response lists every comment on the issue, so the one just posted has to be picked out
+        // of two. Which one that is comes from the timestamps, not from the position — see
+        // ResultMapperTests for the reversed-order proof.
+        Assert.Equal(WriteCommentKey, result.CommentKey);
+        Assert.Equal(WriteCommentText, result.Text);
+        Assert.NotNull(result.CreatedAt);
     }
 
     [Fact]
@@ -1798,7 +1855,7 @@ public class ToolBehaviourTests
     {
         using var handler = new StubHttpMessageHandler();
         handler.EnqueueNoBody(HttpStatusCode.NoContent);
-        handler.EnqueueJson(ToolPayloads.HotspotShowWithComment);
+        handler.EnqueueJson(SonarFixtures.Read("hotspots-show-with-comment.json"));
 
         using var client = ToolTestHost.CreateClient(handler);
 

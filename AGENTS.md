@@ -73,7 +73,7 @@ to audit — treat that as a hard constraint, not a preference.
 | D23 | **Read-only mode is the absence of a registration.** `SONARQUBE_MCP_READ_ONLY` makes `McpServerSetup.ToolTypesFor` return three tool classes instead of four, so the four write tools never appear in `tools/list`. It is not a check inside a tool: a model must not be able to propose a call the server would then refuse. `SmokeTest`'s second leg is the end-to-end proof. |
 | D24 | **Writes are `application/x-www-form-urlencoded` `ByteArrayContent`**, built by `Http/FormBody.cs` — deliberately not `FormUrlEncodedContent`. `RetryHandler.IsResendable` recognises `ByteArrayContent`, which is exactly what makes a write replayable after a 429. SonarQube rejects a JSON body and ignores query parameters on these endpoints, so this is also the only encoding that works. |
 | D25 | **Measures are strings, absence is not zero, and ratings are letters.** Every measure value arrives as a string, including for `INT` and `PERCENT`; new-code numbers live in `periods[0].value` and never in `value`; a metric with no data is *silently omitted* from the response. `MeasureFormatting` therefore lifts `newCodeValue` out of the period, translates `*_rating` `"1.0"`–`"5.0"` to `A`–`E`, and diffs what was asked for against what came back into `missingMetrics`. A model reading an absent `coverage` as 0% instead of "not measured" draws the opposite conclusion from the truth. |
-| D26 | **Rule and hotspot prose is HTML, converted by hand, and truncation is visible.** `getRule` reads `rules/search?rule_key=…&f=descriptionSections` (C1 — `rules/show` has no `f` on Cloud), and `HtmlToText` (~90 lines, no dependency) unescapes entities, fences `<pre><code>`, bullets `<li>`, breaks on `<p>`/`<h*>`/`<br>` and drops the rest. Sections are capped at `ToolDefaults.MaxRuleSectionChars` with a visible marker and a `truncated` flag on the result. A response with no sections at all is reported as a `note` about entitlement, not as an error — see *API gotchas*. |
+| D26 | **Rule and hotspot prose is HTML, converted by hand, and truncation is visible.** `getRule` reads `rules/search?rule_key=…&f=descriptionSections` (C1 — `rules/show` has no `f` on Cloud), and `HtmlToText` (~90 lines, no dependency) unescapes entities, fences `<pre><code>`, bullets `<li>`, breaks on `<p>`/`<h*>`/`<br>` and drops the rest. Sections are capped at `ToolDefaults.MaxRuleSectionChars` with a visible marker and a `truncated` flag on the result. Sections are returned in the order they were *asked for*, not the order the API listed them, and one key can appear more than once — a per-framework rule answers `how_to_fix` once per `context`, which is the only thing telling the copies apart. A response with no sections at all means the request went out without a credential (see *API gotchas*) and is reported as a `note`, not as an error. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -161,9 +161,9 @@ Four of those rows are judgement calls rather than readings of the API. The same
 - **`setHotspotStatus` is idempotent.** `hotspots/change_status` takes a target `status` plus
   `resolution` pair rather than a transition, so re-applying the same pair is a no-op. Note the one
   asymmetry, which the description states: a `comment` argument is appended *every* time, including
-  on a no-op. **Unverified against a real token** — it cannot be probed anonymously. If the API
-  turns out to answer 400 to a no-op, the fix is to swallow that specific 400, not to flip the
-  annotation, because the caller named an end state and the end state is in place.
+  on a no-op. **Verified 2026-08-22 with a user token**: `REVIEWED`/`SAFE` applied twice in a row
+  answered `204` both times, and the hotspot's changelog gained an entry for the first call only —
+  so the no-op is a no-op in the record as well as in the response.
 - **`assignIssue` is idempotent and `addIssueComment` is not.** Assigning the same person twice
   changes nothing; commenting twice makes two comments. Which is why the comment tool's description
   says never to retry a call whose outcome is unknown without reading the issue first.
@@ -272,11 +272,14 @@ from the fixture manifest.
   parameter is kept because it bundles `strategy` and `qualifiers` into one comprehensible choice,
   **not** because of that trap — do not repeat the claim in a tool description without re-verifying
   it. It may still hold for `strategy=children`.
-- **`getRule` may return no sections at all.** Anonymously, `f=descriptionSections` came back empty
-  with a `requiredEntitlements` field on the rule. That looks like an anonymous-access restriction
-  rather than a parameter error, but it is **unproven**: the tool degrades to `sections: []` plus a
-  `note` and still returns the name, impacts and clean-code attribute. Phase F proves or disproves
-  it with a real token, and the changelog says which.
+- **`getRule` returns no sections to an anonymous request, and sections to any authenticated one.**
+  Verified 2026-08-22: the *same* request — `rules/search?organization=quartznet&rule_key=…&f=…`,
+  byte for byte — answers with no `descriptionSections` and `requiredEntitlements: []` without a
+  credential, and with the sections present when an ordinary user token is attached. It is an
+  anonymous-access restriction, not a parameter error and not a paid entitlement; the two captures
+  (`rules-search-rule-key.json` and `rules-search-with-sections.json`) are the same rule and differ
+  only by the header. A tokenless server therefore still degrades to `sections: []` plus a `note`,
+  which is what that path is for.
 
 ## Agent skill
 

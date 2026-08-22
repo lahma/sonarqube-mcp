@@ -517,6 +517,11 @@ public class SonarApiClientTests
         Assert.Equal("Null pointers should not be dereferenced", rule.Name);
     }
 
+    /// <summary>
+    /// The same request as the test above, captured with a user token instead of anonymously: the
+    /// sections are there. That pair is the whole evidence for the entitlement story — one request,
+    /// two credentials, two answers.
+    /// </summary>
     [Fact]
     public async Task SearchRulesReadsSectionsWhenTheyArePresent()
     {
@@ -532,9 +537,43 @@ public class SonarApiClientTests
         var rule = Assert.Single(response.Rules!);
         var sections = rule.DescriptionSections!;
 
-        Assert.Equal(4, sections.Count);
-        Assert.Equal("introduction", sections[0].Key);
-        Assert.Equal("csharp", sections.Single(s => s.Key == "how_to_fix").Context?.Key);
+        // The wire order is the API's, not the tool's: this rule answers how_to_fix first and has no
+        // introduction at all, which is why the tool orders by what the caller asked for.
+        Assert.Equal(["how_to_fix", "root_cause", "resources"], sections.Select(section => section.Key));
+        Assert.All(sections, section => Assert.Null(section.Context));
+    }
+
+    /// <summary>
+    /// A rule whose fix guidance is per-framework: <c>how_to_fix</c> appears once per context, and
+    /// the context is the only thing telling the two apart. Nothing about that shape is visible on a
+    /// single-context rule, so it needs a capture of its own.
+    /// </summary>
+    [Fact]
+    public async Task SearchRulesReadsThePerContextSectionsOfAMultiFrameworkRule()
+    {
+        using var stub = new StubHttpMessageHandler();
+        stub.EnqueueJson(SonarFixtures.Read("rules-search-with-contexts.json"));
+        using var client = TestClient.Create(stub);
+
+        var response = await client.SearchRulesAsync(
+            "quartznet",
+            "javasecurity:S2076",
+            TestContext.Current.CancellationToken);
+
+        var rule = Assert.Single(response.Rules!);
+        var sections = rule.DescriptionSections!;
+
+        var contexts = sections
+            .Where(section => string.Equals(section.Key, "how_to_fix", StringComparison.Ordinal))
+            .Select(section => section.Context)
+            .ToArray();
+
+        Assert.Equal(2, contexts.Length);
+        Assert.Equal(["java_lang_package", "apache_commons"], contexts.Select(context => context?.Key));
+        Assert.Equal(["Java Lang Package", "Apache Commons"], contexts.Select(context => context?.DisplayName));
+
+        // The sections that are not per-framework carry no context at all.
+        Assert.Null(sections.Single(section => section.Key == "root_cause").Context);
     }
 
     [Fact]
@@ -1318,7 +1357,7 @@ public class SonarApiClientTests
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssueOperationResponseDto),
             "hotspots-search-page.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.HotspotsSearchResponseDto),
-            "hotspots-show.json" =>
+            "hotspots-show.json" or "hotspots-show-with-comment.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.HotspotShowResponseDto),
             "measures-component.json" or "measures-component-periods.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresComponentResponseDto),
@@ -1338,7 +1377,8 @@ public class SonarApiClientTests
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.BranchesListResponseDto),
             "project-pull-requests-list.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.PullRequestsListResponseDto),
-            "rules-search-rule-key.json" or "rules-search-with-sections.json" =>
+            "rules-search-rule-key.json" or "rules-search-with-sections.json"
+                or "rules-search-with-contexts.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.RulesSearchResponseDto),
             "sources-lines.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.SourcesLinesResponseDto),
@@ -1362,13 +1402,14 @@ public class SonarApiClientTests
         string[] required =
         [
             "issues-search-page.json", "issues-search-empty.json", "issues-search-single.json",
-            "hotspots-search-page.json", "hotspots-show.json",
+            "hotspots-search-page.json", "hotspots-show.json", "hotspots-show-with-comment.json",
             "measures-component.json", "measures-component-periods.json", "measures-component-tree.json",
             "measures-search-history.json", "metrics-search.json",
             "qualitygates-project-status-none.json", "qualitygates-project-status-error.json",
             "components-search.json", "components-tree-leaves.json",
             "project-branches-list.json", "project-pull-requests-list.json",
             "sources-lines.json", "rules-search-rule-key.json", "rules-search-with-sections.json",
+            "rules-search-with-contexts.json",
             "issues-do_transition.json", "issues-assign.json", "issues-add_comment.json",
             "error-400-page-size.json", "error-400-result-cap.json",
             "error-401-authentication-required.json", "error-404-component-not-found.json",

@@ -386,10 +386,10 @@ internal static class ResultMapper
         }
 
         var note = sections.Count == 0
-            ? "SonarQube returned this rule without any description sections. That happens when the request " +
-              "is anonymous or the token's account is not entitled to read rule descriptions — set " +
-              "SONARQUBE_TOKEN and try again. The rule's name, impacts and clean-code attribute above are " +
-              "unaffected."
+            ? "SonarQube returned this rule without any description sections, which is what an anonymous " +
+              "request gets: rule descriptions are sent only to an authenticated one. Set SONARQUBE_TOKEN in " +
+              "this server's environment and restart it. The rule's name, impacts and clean-code attribute " +
+              "above are unaffected."
             : null;
 
         return new RuleDetail

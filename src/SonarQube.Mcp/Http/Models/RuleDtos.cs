@@ -22,12 +22,20 @@ internal sealed record RulesSearchResponseDto : PagedEnvelopeDto
 /// One rule.
 /// </summary>
 /// <remarks>
+/// <para>
 /// <b><see cref="DescriptionSections"/> can legitimately be absent.</b> Verified live 2026-08-11:
 /// an anonymous <c>rules/search?f=descriptionSections</c> returns the rule with its name, impacts
 /// and clean-code attribute but <em>no</em> sections, and with a <see cref="RequiredEntitlements"/>
-/// field present. That looks like an entitlement restriction rather than a parameter error, so the
-/// tool layer degrades — sections omitted, a note explaining why — instead of treating it as a
-/// failure. Whether an authenticated token gets the sections is unproven and is Phase F's job.
+/// field present. Re-verified 2026-08-22 with an ordinary user token: the <em>same</em> request,
+/// byte for byte, comes back with the sections. So it is an anonymous-access restriction and not an
+/// entitlement — but a tokenless server still has to survive it, which is why the tool layer
+/// degrades (sections omitted, a note explaining why) instead of treating it as a failure.
+/// </para>
+/// <para>
+/// A section key is <b>not unique</b>: a rule with per-framework fix guidance answers
+/// <c>how_to_fix</c> once per <see cref="RuleDescriptionSectionDto.Context"/>. Anything that indexes
+/// sections by key alone silently keeps one of them.
+/// </para>
 /// </remarks>
 internal sealed record RuleDto
 {
