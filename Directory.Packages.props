@@ -10,13 +10,17 @@
        from the environment, so there is no token cache to protect and no ProtectedData row. -->
   <ItemGroup Label="App">
     <!-- Exact pin: the MCP SDK's AOT/serializer contract is verified against this version only. -->
-    <PackageVersion Include="ModelContextProtocol" Version="[2.1.0]" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+    <PackageVersion Include="ModelContextProtocol" Version="[2.2.0]" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
   </ItemGroup>
 
+  <!-- xunit stays on 3.x. Version 4 drops VSTest-mode support, and VSTest mode is the D11
+       interface: Fallout's ITest drives the run through VSTest loggers and parses the result
+       against the VSTest schema, so a bump degrades CI reporting to pass/fail with no error
+       text. Revisit when Fallout's ITest speaks the Microsoft.Testing.Platform protocol. -->
   <ItemGroup Label="Test">
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>

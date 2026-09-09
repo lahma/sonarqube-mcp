@@ -264,7 +264,9 @@ internal sealed class IssueWriteTools
                 inNewCodePeriod: null,
                 sortBy: null,
                 ascending: null,
-                TransitionFields,
+                additionalFields: TransitionFields,
+                facets: null,
+                facetMode: null,
                 branch: null,
                 pullRequest: null,
                 page: null,
@@ -273,5 +275,83 @@ internal sealed class IssueWriteTools
             .ConfigureAwait(false);
 
         return response.Issues is { Count: > 0 } issues ? issues[0].Transitions : null;
+    }
+
+    [McpServerTool(
+        Name = "bulkUpdateIssues",
+        Title = "Update many issues",
+        ReadOnly = false,
+        Destructive = false,
+        Idempotent = false,
+        OpenWorld = true,
+        UseStructuredContent = true)]
+    [Description(
+        "Applies one transition, one assignment and/or one comment to many issues at once - the tool for " +
+        "clearing a batch of the same finding rather than calling transitionIssue in a loop. The change takes " +
+        "effect immediately on the real organization and is visible to everyone, and it is reversible the same " +
+        "way a single transition is. SonarQube answers with counts and names no issue, so an issue the " +
+        "transition was not legal from is counted as ignored rather than reported by key: read those back with " +
+        "getIssue. A comment is added to every key, including the ignored ones, and commenting twice makes two " +
+        "comments - never retry a call whose outcome is unknown without reading the issues first. At least one " +
+        "of transition, assignee or comment must be given.")]
+    public static async Task<BulkUpdateResult> BulkUpdateIssuesAsync(
+        SonarApiClient client,
+        SonarQubeMcpOptions options,
+        [Description("The issue keys to change, as searchIssues reports them. At most 500 per call.")]
+        string[] issueKeys,
+        [Description("The transition to apply to every issue that can take it: accept, confirm, falsepositive, reopen, resolve, unconfirm or wontfix. Issues it is not legal for are counted as ignored, not failed.")]
+        string? transition = null,
+        [Description("A login to assign every issue to. The empty string unassigns them all.")]
+        string? assignee = null,
+        [Description("A comment added to every issue, including ones the transition was ignored for. Strongly recommended when accepting or dismissing.")]
+        string? comment = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var keys = ToolDefaults.RequireIssueKeys(issueKeys);
+        var name = transition is null ? null : ToolDefaults.ResolveTransition(transition);
+        var hasAssignee = assignee is not null;
+        var hasComment = !string.IsNullOrWhiteSpace(comment);
+
+        if (name is null && !hasAssignee && !hasComment)
+        {
+            throw new McpException(
+                "Nothing to do: pass at least one of transition, assignee or comment. A call with only " +
+                "issueKeys would report counts for a change that was never asked for.");
+        }
+
+        var applied = new List<string>(3);
+
+        if (name is not null)
+        {
+            applied.Add("transition " + name);
+        }
+
+        if (hasAssignee)
+        {
+            applied.Add(assignee!.Length == 0 ? "unassign" : "assign to " + assignee);
+        }
+
+        if (hasComment)
+        {
+            applied.Add("comment");
+        }
+
+        var context = new ToolCallContext(
+            "bulkUpdateIssues",
+            options.DefaultProject,
+            Component: null,
+            EntityKey: keys.Count + " issue(s)");
+
+        return await ToolErrors.ExecuteAsync(context, async () =>
+        {
+            var response = await client
+                .BulkChangeIssuesAsync(keys, name, assignee, comment, cancellationToken)
+                .ConfigureAwait(false);
+
+            return ResultMapper.BulkUpdate(response, keys, applied);
+        }).ConfigureAwait(false);
     }
 }

@@ -759,6 +759,120 @@ public class ToolBehaviourTests
         Assert.Empty(handler.Requests);
     }
 
+    /// <summary>
+    /// The regression for the defect this release exists to fix. SonarQube Cloud only applies a
+    /// <c>branch</c> or <c>pullRequest</c> filter to an <c>issues=</c> key lookup when the project is
+    /// named alongside it. Verified live on 2026-09-09 against <c>quartznet_quartznet</c> pull
+    /// request 3735: the key filter plus <c>pullRequest</c> answered <c>200</c> with
+    /// <c>total: 0</c>, and the same query with <c>componentKeys</c> added answered with the issue.
+    /// So <c>componentKeys</c> has to be on the wire whenever a project can be resolved — not only
+    /// when a scope is given, because a caller who omits the scope on a main-branch issue must keep
+    /// working either way.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("release/4.0", null)]
+    [InlineData(null, "3735")]
+    public async Task GetIssueNamesTheProjectSoTheScopeIsActuallyApplied(string? branch, string? pullRequest)
+    {
+        using var handler = Stub("issues-search-single.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        await IssueReadTools.GetIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            branch: branch,
+            pullRequest: pullRequest,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolTestHost.Project, Query(handler, "componentKeys"));
+        Assert.Equal(IssueKey, Query(handler, "issues"));
+        Assert.Equal(branch, Query(handler, "branch"));
+        Assert.Equal(pullRequest, Query(handler, "pullRequest"));
+    }
+
+    /// <summary>An explicit <c>projectKey</c> wins over the configured default, as everywhere else.</summary>
+    [Fact]
+    public async Task GetIssuePrefersAnExplicitProjectKeyOverTheConfiguredDefault()
+    {
+        using var handler = Stub("issues-search-single.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        await IssueReadTools.GetIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            projectKey: "otherorg_otherrepo",
+            pullRequest: "3735",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("otherorg_otherrepo", Query(handler, "componentKeys"));
+    }
+
+    /// <summary>
+    /// With no project to name, a scoped lookup cannot be honoured — so it is refused here rather
+    /// than sent and reported back as "no such issue", which is what the API would make it look like.
+    /// A main-branch read with no project stays legal, because that one genuinely works.
+    /// </summary>
+    [Fact]
+    public async Task GetIssueRefusesAScopedLookupItCannotNameAProjectForWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(defaultProject: null),
+                IssueKey,
+                pullRequest: "3735",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("projectKey", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ToolDefaults.DefaultProjectVariable, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("3735", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>Unscoped and with nothing configured, the key alone still resolves on the main branch.</summary>
+    [Fact]
+    public async Task GetIssueWithNoProjectAnywhereStillReadsAMainBranchIssue()
+    {
+        using var handler = Stub("issues-search-single.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(defaultProject: null),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Null(Query(handler, "componentKeys"));
+        Assert.Equal(IssueKey, result.Key);
+    }
+
+    /// <summary>
+    /// A hotspot key has the same shape as an issue key and resolves to nothing here, so the message
+    /// has to name the tool that does read it. Without that the model retries getIssue.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueKeyThatMatchesNothingPointsAtGetHotspotAsWellAsSearchIssues()
+    {
+        using var handler = Stub("issues-search-empty.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.GetIssueAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                "AZ_nosuchissue",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("getHotspot", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("projectKey", exception.Message, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------------------------------
     // getRule
     // ---------------------------------------------------------------------------------------
@@ -2201,6 +2315,467 @@ public class ToolBehaviourTests
     // ---------------------------------------------------------------------------------------
 
     /// <summary>A stub primed with one golden fixture.</summary>
+    // ---------------------------------------------------------------------------------------
+    // getAnalysisStatus
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetAnalysisStatusReportsAFinishedAnalysisAndTheScopeItWasFor()
+    {
+        using var handler = Stub("ce-component.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.GetAnalysisStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/ce/component", Path(handler));
+        Assert.Equal(Project, Query(handler, "component"));
+
+        // The endpoint takes no scope of its own; each task reports the one it analysed.
+        Assert.Null(Query(handler, "branch"));
+        Assert.Null(Query(handler, "pullRequest"));
+
+        Assert.False(result.AnalysisInProgress);
+        Assert.Empty(result.Pending);
+        Assert.NotNull(result.Latest);
+        Assert.Equal("SUCCESS", result.Latest.Status);
+        Assert.Equal("3756", result.Latest.PullRequest);
+
+        // Cloud spells the finish time executedAt; the published example calls it finishedAt.
+        Assert.NotNull(result.Latest.FinishedAt);
+        Assert.Contains("pull request 3756", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A failed analysis is the case worth getting right: every measure and gate for that scope is
+    /// stale rather than merely bad, and this is the only place SonarQube's reason is visible.
+    /// </summary>
+    [Fact]
+    public async Task GetAnalysisStatusSurfacesAFailedAnalysisAndItsErrorMessage()
+    {
+        using var handler = Stub("ce-component-failed.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.GetAnalysisStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("FAILED", result.Latest?.Status);
+        Assert.Equal("the error message", result.Latest?.ErrorMessage);
+        Assert.Contains("FAILED", result.Note, StringComparison.Ordinal);
+        Assert.Contains("the error message", result.Note, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // summarizeIssues
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The whole point of the tool, against a live capture: one request, no issues fetched, and the
+    /// groupings returned in the order they were asked for rather than the order SonarQube listed.
+    /// </summary>
+    [Fact]
+    public async Task SummarizeIssuesAsksForOneIssueAndReturnsTheGroupingsInTheOrderRequested()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["rules", "files", "impactSeverities"],
+            impactSeverities: ["BLOCKER"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/issues/search", Path(handler));
+        Assert.Equal("1", Query(handler, "ps"));
+        Assert.Equal("rules,fileUuids,impactSeverities", Query(handler, "facets"));
+        Assert.Equal("rules", Query(handler, "additionalFields"));
+        Assert.Null(Query(handler, "facetMode"));
+
+        Assert.Equal(["rules", "files", "impactSeverities"], result.Facets.Select(facet => facet.GroupBy));
+        Assert.Equal("issues", result.CountedIn);
+        Assert.Equal(80, result.MatchingIssues);
+    }
+
+    /// <summary>
+    /// A file grouping must never hand back the UUID SonarQube reports. The join comes from the
+    /// response's own component sidecar, so it costs no extra request.
+    /// </summary>
+    [Fact]
+    public async Task SummarizeIssuesReportsFilesAsPathsRatherThanComponentUuids()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["files"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var files = Assert.Single(result.Facets);
+
+        Assert.NotEmpty(files.Buckets);
+
+        foreach (var bucket in files.Buckets)
+        {
+            Assert.NotNull(bucket.Value);
+            Assert.DoesNotContain("AYlo", bucket.Value, StringComparison.Ordinal);
+            Assert.Contains("/", bucket.Value, StringComparison.Ordinal);
+        }
+
+        // Largest first, so the worst file is the first thing read.
+        Assert.True(files.Buckets[0].Count >= files.Buckets[^1].Count);
+    }
+
+    /// <summary>A rule key on its own is unreadable; the sidecar is what makes the ranking mean something.</summary>
+    [Fact]
+    public async Task SummarizeIssuesLabelsRuleKeysWithTheirTitles()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["rules"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var rules = Assert.Single(result.Facets);
+
+        Assert.Contains(rules.Buckets, bucket => !string.IsNullOrEmpty(bucket.Label));
+        Assert.All(rules.Buckets, bucket => Assert.Contains(":", bucket.Value!, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The note has to say this or the numbers mislead: SonarQube computes each facet with its own
+    /// filter removed, so a severity-filtered search still reports every severity's project-wide
+    /// count. Verified live 2026-09-09 — filtering to BLOCKER returned totalCount 80 alongside an
+    /// impactSeverities facet whose MEDIUM bucket was in the thousands.
+    /// </summary>
+    [Fact]
+    public async Task SummarizeIssuesWarnsThatAGroupingIgnoresItsOwnFilter()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["impactSeverities"],
+            impactSeverities: ["BLOCKER"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var severities = Assert.Single(result.Facets);
+        var buckets = severities.Buckets.ToDictionary(bucket => bucket.Value!, bucket => bucket.Count);
+
+        Assert.Equal(80, result.MatchingIssues);
+        Assert.True(
+            buckets["MEDIUM"] > result.MatchingIssues,
+            "The fixture must still show a facet bucket larger than the filtered total.");
+
+        Assert.Contains("own filter removed", result.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SummarizeIssuesScopesToAPullRequestAndCountsEffortWhenAsked()
+    {
+        using var handler = Stub("issues-search-facets-pullrequest.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            pullRequest: "3735",
+            groupBy: ["rules"],
+            countBy: "effort",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("3735", Query(handler, "pullRequest"));
+        Assert.Equal("effort", Query(handler, "facetMode"));
+        Assert.Equal("3735", result.PullRequest);
+        Assert.Equal("remediationMinutes", result.CountedIn);
+        Assert.Contains("remediation minutes", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>Defaults are the three questions a triage always asks first.</summary>
+    [Fact]
+    public async Task SummarizeIssuesDefaultsToSeverityRuleAndFileGroupings()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("impactSeverities,rules,fileUuids", Query(handler, "facets"));
+    }
+
+    /// <summary>
+    /// <c>files</c> is the tool's word and <c>fileUuids</c> is the API's; the API rejects the first
+    /// and this server rejects the second, so one word means one thing at the tool boundary.
+    /// </summary>
+    [Theory]
+    [InlineData("fileUuids", "files")]
+    [InlineData("severities", "impactSeverities")]
+    [InlineData("types", "impactSoftwareQualities")]
+    [InlineData("statuses", "issueStatuses")]
+    public async Task SummarizeIssuesRejectsALegacyGroupingAndNamesTheModernOne(string legacy, string modern)
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SummarizeIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                groupBy: [legacy],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(modern, exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>Whatever case a grouping is asked for in, the result echoes one canonical spelling.</summary>
+    [Fact]
+    public async Task SummarizeIssuesEchoesOneCanonicalGroupingSpellingWhateverCaseWasAsked()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["FILES", "Rules", "files"],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // Duplicates collapse, and the wire spelling is the API's rather than the tool's.
+        Assert.Equal(["files", "rules"], result.Facets.Select(facet => facet.GroupBy));
+        Assert.Equal("fileUuids,rules", Query(handler, "facets"));
+    }
+
+    [Fact]
+    public async Task SummarizeIssuesRefusesAnUnknownGroupingWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SummarizeIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                groupBy: ["nonsense"],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("nonsense", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("directories", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task SummarizeIssuesRefusesAnUnknownCountModeWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueReadTools.SummarizeIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                countBy: "minutes",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("issues", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("effort", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // getIssueChangelog
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetIssueChangelogReadsTheKeyAloneAndReportsEachFieldThatMoved()
+    {
+        using var handler = Stub("issues-changelog.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetIssueChangelogAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/issues/changelog", Path(handler));
+        Assert.Equal(IssueKey, Query(handler, "issue"));
+
+        // Not scope-sensitive, unlike issues/search: the key alone resolves.
+        Assert.Equal(["issue"], Names(handler));
+
+        Assert.Equal(2, result.Entries.Count);
+        Assert.Equal("lahma@github", result.Entries[0].Author);
+        Assert.Equal(
+            ["resolution", "status"],
+            result.Entries[0].Changes.Select(change => change.Field));
+        Assert.Equal("OPEN", result.Entries[0].Changes[1].From);
+        Assert.Equal("RESOLVED", result.Entries[0].Changes[1].To);
+        Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// An empty changelog from a tokenless server is not evidence that nothing happened: SonarQube
+    /// answers an anonymous request with an empty list rather than a 401 (the same restriction that
+    /// empties a rule's description sections).
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyChangelogWithoutATokenSaysItCouldNotBeReadRatherThanThatNothingHappened()
+    {
+        using var handler = Stub("issues-changelog-anonymous.json");
+        using var client = ToolTestHost.CreateAnonymousClient(handler);
+
+        var result = await IssueReadTools.GetIssueChangelogAsync(
+            client,
+            ToolTestHost.CreateOptions(token: null),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Entries);
+        Assert.Contains("SONARQUBE_TOKEN", result.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnEmptyChangelogWithATokenSaysNobodyHasChangedTheIssue()
+    {
+        using var handler = Stub("issues-changelog-anonymous.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetIssueChangelogAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Entries);
+        Assert.DoesNotContain("SONARQUBE_TOKEN", result.Note, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // bulkUpdateIssues
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task BulkUpdateIssuesSendsOneFormBodyAndReportsWhatDidNotMove()
+    {
+        using var handler = Stub("issues-bulk-change.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.BulkUpdateIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            [IssueKey, WriteIssueKey],
+            transition: "accept",
+            comment: "handled in bulk",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("/api/issues/bulk_change", Path(handler));
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+
+        var body = handler.Requests[0].Body!;
+
+        Assert.Contains("issues=" + IssueKey + "%2C" + WriteIssueKey, body, StringComparison.Ordinal);
+        Assert.Contains("do_transition=accept", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("assign=", body, StringComparison.Ordinal);
+
+        Assert.Equal(2, result.Total);
+        Assert.Equal(1, result.Changed);
+        Assert.Equal(1, result.Ignored);
+        Assert.Equal(["transition accept", "comment"], result.Applied);
+        Assert.Contains("availableTransitions", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>A call with only keys would report counts for a change nobody asked for.</summary>
+    [Fact]
+    public async Task BulkUpdateIssuesWithNoActionIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.BulkUpdateIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                [IssueKey],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("at least one of transition, assignee or comment", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task BulkUpdateIssuesWithNoKeysIsRefusedWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.BulkUpdateIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                [],
+                transition: "accept",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("issueKeys is required", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>The endpoint's own cap, enforced before the request rather than as a 400.</summary>
+    [Fact]
+    public async Task BulkUpdateIssuesRefusesMoreKeysThanTheEndpointAcceptsWithoutCallingTheApi()
+    {
+        using var handler = new StubHttpMessageHandler();
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var keys = Enumerable.Range(0, ToolDefaults.MaxBulkIssueKeys + 1)
+            .Select(index => "AZ_key" + index)
+            .ToArray();
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            IssueWriteTools.BulkUpdateIssuesAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                keys,
+                transition: "accept",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("batches", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    /// <summary>Empty means unassign here too, the same way it does on <c>assignIssue</c>.</summary>
+    [Fact]
+    public async Task BulkUpdateIssuesSendsAnEmptyAssigneeToUnassign()
+    {
+        using var handler = Stub("issues-bulk-change.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.BulkUpdateIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            [IssueKey],
+            assignee: string.Empty,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("assign=", handler.Requests[0].Body!, StringComparison.Ordinal);
+        Assert.Equal(["unassign"], result.Applied);
+    }
+
     private static StubHttpMessageHandler Stub(string fixture)
     {
         var handler = new StubHttpMessageHandler();

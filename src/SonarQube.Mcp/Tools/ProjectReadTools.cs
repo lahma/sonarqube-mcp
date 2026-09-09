@@ -241,4 +241,44 @@ internal sealed class ProjectReadTools
             return ResultMapper.QualityGate(response, project, scope, options.BaseUrlText);
         }).ConfigureAwait(false);
     }
+
+    [McpServerTool(
+        Name = "getAnalysisStatus",
+        Title = "Get analysis status",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = true,
+        UseStructuredContent = true)]
+    [Description(
+        "Reports what SonarQube is doing with this project right now: analyses that are queued or running, " +
+        "and the last one that finished, each with the branch or pull request it belongs to. Call this first " +
+        "when the analysis runs in CI. A scanner step going green only means the report was uploaded - " +
+        "SonarQube processes it afterwards, and until it finishes getQualityGateStatus, searchIssues and the " +
+        "measure tools all answer from the previous analysis without saying so. This is also the only place a " +
+        "failed analysis and its error message are visible; a failed analysis leaves stale numbers rather than " +
+        "bad ones. Unlike every other tool here the answer changes between identical calls, so re-read it " +
+        "rather than caching it.")]
+    public static async Task<AnalysisStatusResult> GetAnalysisStatusAsync(
+        SonarApiClient client,
+        SonarQubeMcpOptions options,
+        [Description("The Sonar project key (for example myorg_myrepo) - the `id` parameter in a sonarcloud.io project URL, not the repository name. Optional when SONARQUBE_MCP_DEFAULT_PROJECT is set; call listProjects to find it.")]
+        string? projectKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var project = ToolDefaults.ResolveProject(projectKey, options);
+
+        var context = new ToolCallContext("getAnalysisStatus", project, Component: null);
+
+        return await ToolErrors.ExecuteAsync(context, async () =>
+        {
+            var response = await client
+                .GetAnalysisTasksAsync(project, cancellationToken)
+                .ConfigureAwait(false);
+
+            return ResultMapper.AnalysisStatus(response, project, options.BaseUrlText);
+        }).ConfigureAwait(false);
+    }
 }

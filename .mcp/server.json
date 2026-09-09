@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
   "name": "io.github.lahma/sonarqube-mcp",
   "description": "SonarQube Cloud over MCP: projects, quality gates, issues, security hotspots, measures, coverage and issue triage.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "repository": {
     "url": "https://github.com/lahma/sonarqube-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "nuget",
       "registryBaseUrl": "https://api.nuget.org",
       "identifier": "mcp-sonarqube",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       },
@@ -44,7 +44,7 @@
         },
         {
           "name": "SONARQUBE_MCP_READ_ONLY",
-          "description": "Set to 1 to register only the fifteen read tools. The four write tools - transitionIssue, assignIssue, addIssueComment and setHotspotStatus - are then absent from tools/list rather than refused when called.",
+          "description": "Set to 1 to register only the eighteen read tools. The five write tools - transitionIssue, assignIssue, addIssueComment, setHotspotStatus and bulkUpdateIssues - are then absent from tools/list rather than refused when called.",
           "isRequired": false,
           "isSecret": false
         }

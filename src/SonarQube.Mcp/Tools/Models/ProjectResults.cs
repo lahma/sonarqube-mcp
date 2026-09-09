@@ -234,3 +234,80 @@ internal sealed record QualityGateResult
     /// <summary>Set when the status needs explaining rather than reporting.</summary>
     public string? Note { get; init; }
 }
+
+/// <summary>
+/// One Compute Engine task: a report that has been uploaded and is queued, running, or done.
+/// </summary>
+/// <remarks>
+/// The scope belongs to the task rather than to the request. A task with neither
+/// <see cref="Branch"/> nor <see cref="PullRequest"/> analysed the main branch.
+/// </remarks>
+internal sealed record AnalysisTask
+{
+    /// <summary>The task id.</summary>
+    public string? Id { get; init; }
+
+    /// <summary><c>PENDING</c>, <c>IN_PROGRESS</c>, <c>SUCCESS</c>, <c>FAILED</c> or <c>CANCELED</c>.</summary>
+    public string? Status { get; init; }
+
+    /// <summary>The branch this task analysed, when it analysed one.</summary>
+    public string? Branch { get; init; }
+
+    /// <summary>The pull request this task analysed, as the SCM number.</summary>
+    public string? PullRequest { get; init; }
+
+    /// <summary>When the scanner uploaded the report.</summary>
+    public DateTimeOffset? SubmittedAt { get; init; }
+
+    /// <summary>When processing started.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
+
+    /// <summary>When processing ended. Absent while the task is queued or running.</summary>
+    public DateTimeOffset? FinishedAt { get; init; }
+
+    /// <summary>How long processing took, in milliseconds.</summary>
+    public long? ExecutionTimeMs { get; init; }
+
+    /// <summary>Who ran the scanner.</summary>
+    public string? SubmittedBy { get; init; }
+
+    /// <summary>Why a <c>FAILED</c> task failed. This is the reason to read a failed task at all.</summary>
+    public string? ErrorMessage { get; init; }
+
+    /// <summary>The failure's category, when SonarQube classified it.</summary>
+    public string? ErrorType { get; init; }
+
+    /// <summary>How many warnings the analysis raised.</summary>
+    public int? WarningCount { get; init; }
+
+    /// <summary>The warning texts, when this token is allowed to read them.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
+
+/// <summary>
+/// The result of <c>getAnalysisStatus</c>: what the Compute Engine is doing with this project.
+/// </summary>
+/// <remarks>
+/// This is the one result in the server that is expected to change between two identical calls, and
+/// it is the only way to tell "the gate is green" from "the gate is still the previous commit's".
+/// </remarks>
+internal sealed record AnalysisStatusResult
+{
+    /// <summary>The project the tasks belong to.</summary>
+    public string? ProjectKey { get; init; }
+
+    /// <summary>Whether anything is queued or running right now.</summary>
+    public bool AnalysisInProgress { get; init; }
+
+    /// <summary>Tasks submitted and not yet finished, oldest first.</summary>
+    public IReadOnlyList<AnalysisTask> Pending { get; init; } = [];
+
+    /// <summary>The most recently executed task, if the project has ever been analysed.</summary>
+    public AnalysisTask? Latest { get; init; }
+
+    /// <summary>What the state means for the caller's next move.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>The project's page, for a human.</summary>
+    public string? Url { get; init; }
+}

@@ -65,6 +65,46 @@ internal static class ComponentKeys
     }
 
     /// <summary>
+    /// Builds a component <b>uuid</b> to path map, which is what a facet needs.
+    /// </summary>
+    /// <remarks>
+    /// <c>issues/search</c>'s <c>fileUuids</c> facet reports internal UUIDs, and the same response's
+    /// <c>components</c> sidecar carries every one of them with its path — so the join is local and
+    /// costs no extra request. Without it the tool would hand a model an opaque identifier it can do
+    /// nothing with. Note the sidecar spells the field <c>uuid</c> here and <c>id</c> on the measures
+    /// endpoints, which is why <see cref="ComponentDto"/> has both.
+    /// </remarks>
+    /// <param name="components">The response's component sidecar.</param>
+    internal static IReadOnlyDictionary<string, string> BuildUuidPathMap(IReadOnlyList<ComponentDto>? components)
+    {
+        if (components is null || components.Count == 0)
+        {
+            return NoComponents;
+        }
+
+        var map = new Dictionary<string, string>(components.Count, StringComparer.Ordinal);
+
+        foreach (var component in components)
+        {
+            var uuid = component.Uuid ?? component.Id;
+
+            if (string.IsNullOrEmpty(uuid))
+            {
+                continue;
+            }
+
+            var path = component.Path ?? component.LongName ?? component.Name ?? component.Key;
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                map[uuid] = path;
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
     /// Resolves a component key to a project-relative path.
     /// </summary>
     /// <remarks>

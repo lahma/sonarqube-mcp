@@ -35,7 +35,10 @@ internal sealed record IssuesSearchResponseDto : PagedEnvelopeDto
     [JsonPropertyName("users")]
     public IReadOnlyList<UserRefDto>? Users { get; init; }
 
-    /// <summary>Facet counts. Present only when <c>facets</c> was requested; never by this server.</summary>
+    /// <summary>
+    /// Facet counts, present only when <c>facets</c> was requested — which <c>summarizeIssues</c>
+    /// does and every other caller does not.
+    /// </summary>
     [JsonPropertyName("facets")]
     public IReadOnlyList<FacetDto>? Facets { get; init; }
 
@@ -374,4 +377,93 @@ internal sealed record IssueOperationResponseDto
     /// <summary>Users referenced by the issue.</summary>
     [JsonPropertyName("users")]
     public IReadOnlyList<UserRefDto>? Users { get; init; }
+}
+
+/// <summary>
+/// <c>api/issues/changelog</c>.
+/// </summary>
+/// <remarks>
+/// Unlike <c>issues/search</c>, this action is <b>not</b> scope-sensitive: it takes an issue key and
+/// nothing else, and a pull-request issue's key resolves without naming the project or the pull
+/// request (verified 2026-09-09). Do not "fix" it by adding a project parameter.
+/// <para>
+/// An anonymous request is answered <c>200</c> with an empty <c>changelog</c> even for an issue that
+/// demonstrably has history — the same anonymous-access restriction that empties a rule's
+/// description sections. Emptiness is therefore reported as a note, never as "nothing ever happened".
+/// </para>
+/// </remarks>
+internal sealed record IssueChangelogResponseDto
+{
+    /// <summary>The changes, oldest first.</summary>
+    [JsonPropertyName("changelog")]
+    public IReadOnlyList<ChangelogEntryDto>? Changelog { get; init; }
+}
+
+/// <summary>One recorded change to an issue: who, when, and every field that moved.</summary>
+internal sealed record ChangelogEntryDto
+{
+    /// <summary>The login of whoever made the change.</summary>
+    [JsonPropertyName("user")]
+    public string? User { get; init; }
+
+    /// <summary>Their display name.</summary>
+    [JsonPropertyName("userName")]
+    public string? UserName { get; init; }
+
+    /// <summary>Whether that account still exists.</summary>
+    [JsonPropertyName("isUserActive")]
+    public bool? IsUserActive { get; init; }
+
+    /// <summary>When the change was made.</summary>
+    [JsonPropertyName("creationDate")]
+    [JsonConverter(typeof(SonarDateTimeOffsetConverter))]
+    public DateTimeOffset? CreationDate { get; init; }
+
+    /// <summary>The fields this one change moved; a single transition usually moves two.</summary>
+    [JsonPropertyName("diffs")]
+    public IReadOnlyList<ChangelogDiffDto>? Diffs { get; init; }
+}
+
+/// <summary>One field within a changelog entry. <c>oldValue</c> is absent when the field had none.</summary>
+internal sealed record ChangelogDiffDto
+{
+    /// <summary>The field name, for example <c>status</c>, <c>resolution</c> or <c>assignee</c>.</summary>
+    [JsonPropertyName("key")]
+    public string? Key { get; init; }
+
+    /// <summary>What it became.</summary>
+    [JsonPropertyName("newValue")]
+    public string? NewValue { get; init; }
+
+    /// <summary>What it was.</summary>
+    [JsonPropertyName("oldValue")]
+    public string? OldValue { get; init; }
+}
+
+/// <summary>
+/// <c>api/issues/bulk_change</c>.
+/// </summary>
+/// <remarks>
+/// Counts only — the endpoint names no issue in its response, so a caller that needs to know
+/// <em>which</em> of its keys were ignored has to re-read them. <c>ignored</c> is the interesting
+/// number: it is what a transition that is not legal from an issue's current state produces, and it
+/// is not an error.
+/// </remarks>
+internal sealed record BulkChangeResponseDto
+{
+    /// <summary>How many issues were addressed.</summary>
+    [JsonPropertyName("total")]
+    public int? Total { get; init; }
+
+    /// <summary>How many actually changed.</summary>
+    [JsonPropertyName("success")]
+    public int? Success { get; init; }
+
+    /// <summary>How many were skipped, typically because the change did not apply to them.</summary>
+    [JsonPropertyName("ignored")]
+    public int? Ignored { get; init; }
+
+    /// <summary>How many failed outright.</summary>
+    [JsonPropertyName("failures")]
+    public int? Failures { get; init; }
 }

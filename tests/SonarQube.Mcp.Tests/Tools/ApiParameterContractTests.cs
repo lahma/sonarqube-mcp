@@ -82,6 +82,8 @@ internal static class SonarApiParameters
         new("issues/search", "s", "IssueSorts"),
         new("issues/search", "asc"),
         new("issues/search", "additionalFields"),
+        new("issues/search", "facets"),
+        new("issues/search", "facetMode"),
         new("issues/search", "branch"),
         new("issues/search", "pullRequest"),
         new("issues/search", "p"),
@@ -96,6 +98,16 @@ internal static class SonarApiParameters
 
         new("issues/add_comment", "issue"),
         new("issues/add_comment", "text"),
+
+        new("issues/changelog", "issue"),
+
+        new("issues/bulk_change", "issues"),
+        new("issues/bulk_change", "do_transition", "Transitions"),
+        new("issues/bulk_change", "assign"),
+        new("issues/bulk_change", "comment"),
+
+        // ------------------------------------------------------------------ analysis tasks
+        new("ce/component", "component"),
 
         // ------------------------------------------------------------------ security hotspots
         new("hotspots/search", "projectKey"),
@@ -180,6 +192,7 @@ internal static class SonarApiParameters
             ["HotspotResolutions"] = ["FIXED", "SAFE"],
             ["RuleSections"] = ["introduction", "root_cause", "assess_the_problem", "how_to_fix", "resources"],
             ["DefaultRuleSections"] = ["introduction", "root_cause", "how_to_fix"],
+            ["DefaultIssueGroupings"] = ["impactSeverities", "rules", "files"],
         };
 
     /// <summary>
@@ -614,6 +627,8 @@ public class ApiParameterContractTests
             sortBy: "CREATION_DATE",
             ascending: false,
             additionalFields: ["rules"],
+            facets: ["rules", "fileUuids"],
+            facetMode: "effort",
             branch: "main",
             pullRequest: "3266",
             page: 1,
@@ -623,6 +638,16 @@ public class ApiParameterContractTests
         _ = await client.DoIssueTransitionAsync("AZ_xePOumT_q4T_1FWf8", "accept", "because", cancellationToken);
         _ = await client.AssignIssueAsync("AZ_xePOumT_q4T_1FWf8", "ada@github", cancellationToken);
         _ = await client.AddIssueCommentAsync("AZ_xePOumT_q4T_1FWf8", "a comment", cancellationToken);
+        _ = await client.GetIssueChangelogAsync("AZ_xePOumT_q4T_1FWf8", cancellationToken);
+
+        _ = await client.BulkChangeIssuesAsync(
+            ["AZ_xePOumT_q4T_1FWf8", "AZ_xePOumT_q4T_1FWf9"],
+            "accept",
+            "ada@github",
+            "a comment",
+            cancellationToken);
+
+        _ = await client.GetAnalysisTasksAsync(Project, cancellationToken);
 
         _ = await client.SearchHotspotsAsync(
             Project, Files, "REVIEWED", "SAFE", true, true, "main", "3266", 1, 10, cancellationToken);
@@ -649,7 +674,7 @@ public class ApiParameterContractTests
 
         // Nothing above may be skipped silently: a method that stopped sending a request would make
         // the table look complete while covering less than it claims.
-        Assert.Equal(19, handler.Requests.Count);
+        Assert.Equal(22, handler.Requests.Count);
 
         var sent = new HashSet<string>(StringComparer.Ordinal);
 

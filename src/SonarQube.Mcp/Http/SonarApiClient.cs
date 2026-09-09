@@ -306,6 +306,13 @@ internal sealed class SonarApiClient : IDisposable
     /// Sidecar arrays to include. Never <c>_all</c>, which drags in a fifty-element
     /// <c>languages</c> array on every response.
     /// </param>
+    /// <param name="facets">
+    /// Fields to return grouped counts for. Each facet is computed with <b>its own</b> filter
+    /// removed, so a search narrowed to one severity still reports every severity's count — see
+    /// <c>summarizeIssues</c>, which is the only caller and the only place that is explained to a
+    /// model.
+    /// </param>
+    /// <param name="facetMode"><c>count</c> (the default) or <c>effort</c>, which returns minutes instead.</param>
     /// <param name="branch">Branch scope; mutually exclusive with <paramref name="pullRequest"/>.</param>
     /// <param name="pullRequest">Pull request scope, as the SCM number.</param>
     /// <param name="page">1-based page.</param>
@@ -327,6 +334,8 @@ internal sealed class SonarApiClient : IDisposable
         string? sortBy = null,
         bool? ascending = null,
         IReadOnlyList<string>? additionalFields = null,
+        IReadOnlyList<string>? facets = null,
+        string? facetMode = null,
         string? branch = null,
         string? pullRequest = null,
         int? page = null,
@@ -351,6 +360,8 @@ internal sealed class SonarApiClient : IDisposable
             .Query("s", sortBy)
             .Query("asc", ascending)
             .QueryList("additionalFields", additionalFields)
+            .QueryList("facets", facets)
+            .Query("facetMode", facetMode)
             .Query("branch", branch)
             .Query("pullRequest", pullRequest)
             .Query("p", page)
@@ -444,6 +455,95 @@ internal sealed class SonarApiClient : IDisposable
                 body,
                 SonarWireJsonContext.Default.IssueOperationResponseDto,
                 cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads one issue's changelog.
+    /// </summary>
+    /// <remarks>
+    /// Takes the key and nothing else. This action is <b>not</b> scope-sensitive the way
+    /// <c>issues/search</c> is: a pull-request issue's key resolves here without naming the project
+    /// or the pull request (verified 2026-09-09).
+    /// </remarks>
+    /// <param name="issue">The issue key.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    internal async Task<IssueChangelogResponseDto> GetIssueChangelogAsync(
+        string issue,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(issue);
+
+        var url = SonarRequestBuilder.Api("issues", "changelog")
+            .Query("issue", issue.Trim())
+            .Build();
+
+        return await GetAsync(url, SonarWireJsonContext.Default.IssueChangelogResponseDto, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Applies one change to many issues at once.
+    /// </summary>
+    /// <remarks>
+    /// The response is four counts and names no issue, so <c>ignored</c> and <c>failures</c> can
+    /// only be resolved by re-reading the keys. A transition that is not legal from an issue's
+    /// current state lands in <c>ignored</c> rather than failing the call, which is exactly why the
+    /// counts have to be surfaced rather than reduced to success or failure.
+    /// </remarks>
+    /// <param name="issues">The issue keys, comma-joined on the wire.</param>
+    /// <param name="transition">A transition name, lower case, applied to every issue that can take it.</param>
+    /// <param name="assignee">A login to assign every issue to; the empty string unassigns.</param>
+    /// <param name="comment">A comment added to every issue, including ones the change was ignored for.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    internal async Task<BulkChangeResponseDto> BulkChangeIssuesAsync(
+        IReadOnlyList<string> issues,
+        string? transition = null,
+        string? assignee = null,
+        string? comment = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(issues);
+
+        if (issues.Count == 0)
+        {
+            throw new ArgumentException("At least one issue key is required.", nameof(issues));
+        }
+
+        var body = new FormBody()
+            .Add("issues", string.Join(',', issues))
+            .Add("do_transition", transition)
+            .Add("assign", assignee)
+            .Add("comment", comment);
+
+        return await PostAsync(
+                SonarRequestBuilder.Api("issues", "bulk_change").Build(),
+                body,
+                SonarWireJsonContext.Default.BulkChangeResponseDto,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------------ analysis tasks
+
+    /// <summary>
+    /// Reads the Compute Engine's queue and last executed task for one project.
+    /// </summary>
+    /// <remarks>
+    /// The scope is a property of each task, not a parameter: this action takes no <c>branch</c> or
+    /// <c>pullRequest</c> and every task reports its own.
+    /// </remarks>
+    /// <param name="component">The project key.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    internal async Task<CeComponentResponseDto> GetAnalysisTasksAsync(
+        string component,
+        CancellationToken cancellationToken = default)
+    {
+        var url = SonarRequestBuilder.Api("ce", "component")
+            .Query("component", SonarRequestBuilder.RequireComponentKey(component))
+            .Build();
+
+        return await GetAsync(url, SonarWireJsonContext.Default.CeComponentResponseDto, cancellationToken)
             .ConfigureAwait(false);
     }
 

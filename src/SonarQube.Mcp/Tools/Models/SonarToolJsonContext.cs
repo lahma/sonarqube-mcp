@@ -42,6 +42,8 @@ namespace SonarQube.Mcp.Tools.Models;
 [JsonSerializable(typeof(PullRequestListResult))]
 [JsonSerializable(typeof(QualityGateCondition))]
 [JsonSerializable(typeof(QualityGateResult))]
+[JsonSerializable(typeof(AnalysisTask))]
+[JsonSerializable(typeof(AnalysisStatusResult))]
 
 // Issue, rule and hotspot results.
 [JsonSerializable(typeof(Impact))]
@@ -52,6 +54,12 @@ namespace SonarQube.Mcp.Tools.Models;
 [JsonSerializable(typeof(IssueFlowLocation))]
 [JsonSerializable(typeof(IssueFlow))]
 [JsonSerializable(typeof(IssueDetail))]
+[JsonSerializable(typeof(IssueFacetBucket))]
+[JsonSerializable(typeof(IssueFacet))]
+[JsonSerializable(typeof(IssueSummaryResult))]
+[JsonSerializable(typeof(IssueChangeDiff))]
+[JsonSerializable(typeof(IssueChangeEntry))]
+[JsonSerializable(typeof(IssueChangelogResult))]
 [JsonSerializable(typeof(RuleSection))]
 [JsonSerializable(typeof(RuleDetail))]
 [JsonSerializable(typeof(HotspotSummary))]
@@ -80,6 +88,7 @@ namespace SonarQube.Mcp.Tools.Models;
 [JsonSerializable(typeof(IssueAssignResult))]
 [JsonSerializable(typeof(IssueCommentResult))]
 [JsonSerializable(typeof(HotspotStatusResult))]
+[JsonSerializable(typeof(BulkUpdateResult))]
 
 // Tool parameter types, for schema generation.
 [JsonSerializable(typeof(string))]

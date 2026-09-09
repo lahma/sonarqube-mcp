@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 
 using SonarQube.Mcp.Tools.Models;
@@ -59,12 +60,20 @@ public class ToolSchemaTests
     [InlineData("listBranches", "projectKey", "")]
     [InlineData("listPullRequests", "projectKey", "")]
     [InlineData("getQualityGateStatus", "projectKey,branch,pullRequest", "")]
+    [InlineData("getAnalysisStatus", "projectKey", "")]
     [InlineData(
         "searchIssues",
         "projectKey,component,branch,pullRequest,issueStatuses,impactSeverities,impactSoftwareQualities,rules,tags," +
         "languages,assignees,createdAfter,createdInLast,inNewCodePeriod,sortBy,ascending,page,pageSize",
         "")]
-    [InlineData("getIssue", "issueKey,branch,pullRequest", "issueKey")]
+    [InlineData(
+        "summarizeIssues",
+        "projectKey,component,branch,pullRequest,groupBy,issueStatuses,impactSeverities," +
+        "impactSoftwareQualities,rules,tags,languages,assignees,createdAfter,createdInLast," +
+        "inNewCodePeriod,countBy",
+        "")]
+    [InlineData("getIssue", "issueKey,projectKey,branch,pullRequest", "issueKey")]
+    [InlineData("getIssueChangelog", "issueKey,projectKey", "issueKey")]
     [InlineData("getRule", "ruleKey,sections", "ruleKey")]
     [InlineData(
         "searchHotspots",
@@ -89,6 +98,7 @@ public class ToolSchemaTests
     [InlineData("assignIssue", "issueKey,assignee", "issueKey")]
     [InlineData("addIssueComment", "issueKey,text", "issueKey,text")]
     [InlineData("setHotspotStatus", "hotspotKey,status,resolution,comment", "hotspotKey,status")]
+    [InlineData("bulkUpdateIssues", "issueKeys,transition,assignee,comment", "issueKeys")]
     public void InputSchemaExposesExactlyTheModelSuppliedArguments(string name, string properties, string required)
     {
         var schema = ToolTestHost.Find(name).ProtocolTool.InputSchema;
@@ -107,6 +117,28 @@ public class ToolSchemaTests
             : [];
 
         Assert.Equal(Split(required), actualRequired);
+    }
+
+    /// <summary>
+    /// The table above must cover every tool. Without this a tool added without a row would have no
+    /// frozen schema at all, which is the one thing the table exists to prevent.
+    /// </summary>
+    [Fact]
+    public void EveryToolHasARowInTheFrozenSchemaTable()
+    {
+        // Read through CustomAttributeData rather than by instantiating the attribute: xunit's
+        // InlineDataAttribute.GetData signature is not a stable thing to depend on, and the tool
+        // name is simply the first constructor argument.
+        var covered = typeof(ToolSchemaTests)
+            .GetMethod(nameof(InputSchemaExposesExactlyTheModelSuppliedArguments))!
+            .GetCustomAttributesData()
+            .Where(data => data.AttributeType == typeof(InlineDataAttribute))
+            .Select(data => (string) ((IReadOnlyList<CustomAttributeTypedArgument>) data.ConstructorArguments[0].Value!)[0].Value!)
+            .ToArray();
+
+        Assert.Equal(
+            ToolTestHost.Tools.Select(tool => tool.ProtocolTool.Name).Order(StringComparer.Ordinal),
+            covered.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -185,7 +217,9 @@ public class ToolSchemaTests
     /// <summary>
     /// The other direction: a tool whose endpoint has no paging must not advertise any of it. An
     /// invented <c>hasMore: false</c> on <c>listBranches</c> would be a promise about a second page
-    /// the API has no concept of.
+    /// the API has no concept of. <c>summarizeIssues</c> belongs here for a different reason: it
+    /// hits a paginated endpoint but its facets are whole-result aggregates that do not page, so a
+    /// paging envelope would invite a second request that returns exactly the same counts.
     /// </summary>
     [Theory]
     [InlineData("listBranches")]
@@ -200,6 +234,10 @@ public class ToolSchemaTests
     [InlineData("assignIssue")]
     [InlineData("addIssueComment")]
     [InlineData("setHotspotStatus")]
+    [InlineData("getAnalysisStatus")]
+    [InlineData("getIssueChangelog")]
+    [InlineData("bulkUpdateIssues")]
+    [InlineData("summarizeIssues")]
     public void UnpaginatedOutputSchemasCarryNoneOfTheEnvelope(string name)
     {
         var properties = OutputProperties(name);

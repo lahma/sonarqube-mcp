@@ -39,10 +39,13 @@ public class ToolInventoryTests
     [
         "addIssueComment",
         "assignIssue",
+        "bulkUpdateIssues",
+        "getAnalysisStatus",
         "getComponentMeasures",
         "getFileCoverage",
         "getHotspot",
         "getIssue",
+        "getIssueChangelog",
         "getMeasuresHistory",
         "getQualityGateStatus",
         "getRule",
@@ -55,6 +58,7 @@ public class ToolInventoryTests
         "searchHotspots",
         "searchIssues",
         "setHotspotStatus",
+        "summarizeIssues",
         "transitionIssue",
     ];
 
@@ -70,12 +74,12 @@ public class ToolInventoryTests
     ];
 
     [Fact]
-    public void ExactlyNineteenToolsAreDeclaredAcrossTheFourToolClasses()
+    public void ExactlyTwentyThreeToolsAreDeclaredAcrossTheFourToolClasses()
     {
         Assert.Equal(4, ToolTestHost.ToolTypes.Count);
         Assert.Equal(ExpectedToolNames.Length, ToolTestHost.ToolMethods.Count);
         Assert.Equal(ExpectedToolNames.Length, ToolTestHost.Tools.Count);
-        Assert.Equal(19, ExpectedToolNames.Length);
+        Assert.Equal(23, ExpectedToolNames.Length);
     }
 
     [Fact]
@@ -103,8 +107,11 @@ public class ToolInventoryTests
     [InlineData("listBranches", "List branches")]
     [InlineData("listPullRequests", "List pull requests")]
     [InlineData("getQualityGateStatus", "Get quality gate status")]
+    [InlineData("getAnalysisStatus", "Get analysis status")]
     [InlineData("searchIssues", "Search issues")]
     [InlineData("getIssue", "Get issue")]
+    [InlineData("getIssueChangelog", "Get issue changelog")]
+    [InlineData("summarizeIssues", "Summarize issues")]
     [InlineData("getRule", "Get rule")]
     [InlineData("searchHotspots", "Search security hotspots")]
     [InlineData("getHotspot", "Get security hotspot")]
@@ -117,6 +124,7 @@ public class ToolInventoryTests
     [InlineData("assignIssue", "Assign issue")]
     [InlineData("addIssueComment", "Add issue comment")]
     [InlineData("setHotspotStatus", "Set hotspot status")]
+    [InlineData("bulkUpdateIssues", "Update many issues")]
     public void TitleIsTheOneThePlanSpecifies(string name, string expectedTitle)
     {
         var tool = ToolTestHost.Find(name).ProtocolTool;
@@ -126,10 +134,15 @@ public class ToolInventoryTests
     }
 
     /// <summary>
-    /// The fifteen read tools, whose whole annotation story is "changes nothing, same answer twice,
+    /// The eighteen read tools, whose whole annotation story is "changes nothing, same answer twice,
     /// talks to a system outside this process". <c>destructiveHint</c> must be <b>absent</b>: the
     /// SDK omits it unless the attribute sets it, and a destructive hint on a read-only tool is
     /// noise in front of a decision <c>readOnlyHint</c> has already made.
+    /// <para>
+    /// <c>getAnalysisStatus</c> is idempotent here in the sense the annotation means — calling it
+    /// changes nothing — even though its answer is expected to differ between calls, which is the
+    /// entire reason it exists. The hint is about effects, not about a stable response.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData("listProjects")]
@@ -137,8 +150,11 @@ public class ToolInventoryTests
     [InlineData("listBranches")]
     [InlineData("listPullRequests")]
     [InlineData("getQualityGateStatus")]
+    [InlineData("getAnalysisStatus")]
     [InlineData("searchIssues")]
+    [InlineData("summarizeIssues")]
     [InlineData("getIssue")]
+    [InlineData("getIssueChangelog")]
     [InlineData("getRule")]
     [InlineData("searchHotspots")]
     [InlineData("getHotspot")]
@@ -159,16 +175,18 @@ public class ToolInventoryTests
     }
 
     /// <summary>
-    /// The four write tools. None of them deletes anything, so all four say
+    /// The five write tools. None of them deletes anything, so all five say
     /// <c>destructiveHint: false</c> explicitly — the SDK's default is <see langword="true"/>.
     /// Idempotence splits on whether the caller names an end state (<c>assignIssue</c>,
-    /// <c>setHotspotStatus</c>) or an action (<c>transitionIssue</c>, <c>addIssueComment</c>).
+    /// <c>setHotspotStatus</c>) or an action (<c>transitionIssue</c>, <c>addIssueComment</c>,
+    /// <c>bulkUpdateIssues</c> — which can carry a comment, and a comment repeats).
     /// </summary>
     [Theory]
     [InlineData("transitionIssue", false)]
     [InlineData("assignIssue", true)]
     [InlineData("addIssueComment", false)]
     [InlineData("setHotspotStatus", true)]
+    [InlineData("bulkUpdateIssues", false)]
     public void WriteToolsAreNonDestructiveAndDeclareIdempotenceExplicitly(string name, bool idempotent)
     {
         var annotations = ToolTestHost.Find(name).ProtocolTool.Annotations;

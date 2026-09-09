@@ -39,6 +39,9 @@ namespace SonarQube.Mcp.Http.Models;
 // Issues.
 [JsonSerializable(typeof(IssuesSearchResponseDto))]
 [JsonSerializable(typeof(IssueOperationResponseDto))]
+[JsonSerializable(typeof(IssueChangelogResponseDto))]
+[JsonSerializable(typeof(BulkChangeResponseDto))]
+[JsonSerializable(typeof(CeComponentResponseDto))]
 
 // Security hotspots. Two response types, because hotspots/show is not hotspots/search with extras.
 [JsonSerializable(typeof(HotspotsSearchResponseDto))]

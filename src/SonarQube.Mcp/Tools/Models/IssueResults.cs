@@ -511,3 +511,129 @@ internal sealed record HotspotDetail
     /// <summary>The hotspot's page in SonarQube.</summary>
     public string? Url { get; init; }
 }
+
+/// <summary>One grouped count within a <c>summarizeIssues</c> result.</summary>
+internal sealed record IssueFacetBucket
+{
+    /// <summary>The value the issues share, already translated out of any internal identifier.</summary>
+    public string? Value { get; init; }
+
+    /// <summary>A human-readable expansion of <see cref="Value"/>, when one exists — a rule's title.</summary>
+    public string? Label { get; init; }
+
+    /// <summary>How many issues are in this bucket, or how many minutes of effort under effort mode.</summary>
+    public int Count { get; init; }
+}
+
+/// <summary>
+/// One field's grouped counts.
+/// </summary>
+/// <remarks>
+/// <see cref="Truncated"/> is not cosmetic: SonarQube caps a facet at a hundred values with no
+/// marker of its own, so a rule ranking that stops at a hundred would otherwise read as the complete
+/// list of rules the project breaks.
+/// </remarks>
+internal sealed record IssueFacet
+{
+    /// <summary>The field the counts are grouped by, spelled as the tool's own groupBy takes it.</summary>
+    public string? GroupBy { get; init; }
+
+    /// <summary>The buckets, largest first.</summary>
+    public IReadOnlyList<IssueFacetBucket> Buckets { get; init; } = [];
+
+    /// <summary>Whether SonarQube's hundred-value cap truncated this facet.</summary>
+    public bool Truncated { get; init; }
+}
+
+/// <summary>
+/// The result of <c>summarizeIssues</c>: how the matching issues distribute, without listing them.
+/// </summary>
+/// <remarks>
+/// <see cref="MatchingIssues"/> is the number of issues the filters actually matched. It is
+/// deliberately not derivable from the buckets, because a facet is computed with its own filter
+/// removed — see the tool description, where that is explained to the model that has to read these
+/// numbers. It is also not called <c>totalCount</c>: that name belongs to the paging envelope every
+/// paginated result carries, and this result does not page.
+/// </remarks>
+internal sealed record IssueSummaryResult
+{
+    /// <summary>The project the counts are for.</summary>
+    public string? ProjectKey { get; init; }
+
+    /// <summary>The branch the counts are for, when one was given.</summary>
+    public string? Branch { get; init; }
+
+    /// <summary>The pull request the counts are for, when one was given.</summary>
+    public string? PullRequest { get; init; }
+
+    /// <summary>How many issues matched the filters, before any grouping.</summary>
+    public int MatchingIssues { get; init; }
+
+    /// <summary>Total remediation effort of the matching issues, in minutes.</summary>
+    public int? TotalEffortMinutes { get; init; }
+
+    /// <summary>Whether the counts are issue counts or remediation minutes.</summary>
+    public string? CountedIn { get; init; }
+
+    /// <summary>The requested groupings, in the order they were asked for.</summary>
+    public IReadOnlyList<IssueFacet> Facets { get; init; } = [];
+
+    /// <summary>Anything the caller needs to know to read the numbers correctly.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>The project's issue page, for a human.</summary>
+    public string? Url { get; init; }
+}
+
+/// <summary>One field that moved in a single recorded change to an issue.</summary>
+internal sealed record IssueChangeDiff
+{
+    /// <summary>The field name, for example <c>status</c>, <c>resolution</c> or <c>assignee</c>.</summary>
+    public string? Field { get; init; }
+
+    /// <summary>What it was; absent when the field had no previous value.</summary>
+    public string? From { get; init; }
+
+    /// <summary>What it became.</summary>
+    public string? To { get; init; }
+}
+
+/// <summary>One entry in an issue's history.</summary>
+internal sealed record IssueChangeEntry
+{
+    /// <summary>When the change was made.</summary>
+    public DateTimeOffset? Date { get; init; }
+
+    /// <summary>The login of whoever made it.</summary>
+    public string? Author { get; init; }
+
+    /// <summary>Their display name.</summary>
+    public string? AuthorName { get; init; }
+
+    /// <summary>Every field this one change moved. A transition usually moves two.</summary>
+    public IReadOnlyList<IssueChangeDiff> Changes { get; init; } = [];
+}
+
+/// <summary>
+/// The result of <c>getIssueChangelog</c>.
+/// </summary>
+/// <remarks>
+/// An empty <see cref="Entries"/> means one of two different things, which is why
+/// <see cref="Note"/> exists: either nobody has ever changed the issue, or the request went out
+/// without a credential, because SonarQube answers an anonymous changelog request with an empty
+/// list rather than a 401.
+/// </remarks>
+internal sealed record IssueChangelogResult
+{
+    /// <summary>The issue the history belongs to.</summary>
+    public string? IssueKey { get; init; }
+
+    /// <summary>The changes, oldest first.</summary>
+    public IReadOnlyList<IssueChangeEntry> Entries { get; init; } = [];
+
+    /// <summary>Why the list might be empty, when it is.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>The issue's page, for a human.</summary>
+    public string? Url { get; init; }
+}

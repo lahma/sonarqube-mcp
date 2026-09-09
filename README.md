@@ -1,16 +1,16 @@
 # sonarqube-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for **SonarQube Cloud**, covering
-the surface a coding agent actually uses in nineteen tools: quality gates, issue triage, security
-hotspots, measures, per-line coverage and rule explanations, plus four gated write tools for
-transitioning, assigning, commenting on and reviewing findings. It is written in C# on .NET 10 and
+the surface a coding agent actually uses in twenty-three tools: quality gates, analysis status,
+issue triage and aggregation, security hotspots, measures, per-line coverage and rule explanations,
+plus five gated write tools for transitioning, assigning, commenting on and reviewing findings. It is written in C# on .NET 10 and
 ships as a Native AOT binary per platform — one self-contained executable, nothing to install,
 starting in roughly ten milliseconds. The point of the project is a supply chain one person can
 actually audit: the whole runtime dependency tree is three packages, all from Microsoft or the
 official MCP organisation —
 [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) (pinned exactly to
-2.1.0), `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`. Set
-`SONARQUBE_MCP_READ_ONLY=1` and the four write tools are not registered at all. MIT licensed.
+2.2.0), `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`. Set
+`SONARQUBE_MCP_READ_ONLY=1` and the five write tools are not registered at all. MIT licensed.
 
 SonarQube Server — the self-hosted and Data Center editions — is explicitly out of scope.
 
@@ -23,8 +23,11 @@ SonarQube Server — the self-hosted and Data Center editions — is explicitly 
 | `listBranches` | Lists the analysed branches with each one's last analysis date, issue counts and gate status, and which is the main branch. | read-only, idempotent |
 | `listPullRequests` | Lists the analysed pull requests with their gate status and new-code issue counts. Each entry's `key` is what the other tools take as `pullRequest`. | read-only, idempotent |
 | `getQualityGateStatus` | Reads the gate verdict for a project, branch or pull request. `failingConditions` is the pre-filtered list of what is actually wrong, with thresholds and measured values. | read-only, idempotent |
+| `getAnalysisStatus` | What SonarQube is doing with the project right now: analyses queued or running, and the last one that finished, each with the branch or pull request it was for and any error. Call it after a CI build — a green scanner step only means the report was uploaded. | read-only, idempotent |
 | `searchIssues` | Searches issues, newest first, each with its **file path**, line, message, rule and clean-code impacts. Defaults to the outstanding work (`OPEN`, `CONFIRMED`). The main triage tool. | read-only, idempotent |
-| `getIssue` | One issue in full: comments, the secondary locations that explain a data-flow finding, and `availableTransitions` — what `transitionIssue` will accept for it. | read-only, idempotent |
+| `summarizeIssues` | Counts issues grouped by rule, file, directory, severity, quality, status, tag, language, assignee or author in one call, instead of paging toward the API's 10,000-result ceiling. Files come back as paths, not UUIDs. | read-only, idempotent |
+| `getIssue` | One issue in full: comments, the secondary locations that explain a data-flow finding, and `availableTransitions` — what `transitionIssue` will accept for it. Pass the `projectKey` and the same scope the search used. | read-only, idempotent |
+| `getIssueChangelog` | One issue's history: who changed its status, resolution or assignee, when, and from what. Read it before re-deciding something a reviewer already decided. | read-only, idempotent |
 | `getRule` | Explains one rule: what it flags, why it matters and how to fix it, with the HTML converted to text and code fenced. Call it once per rule, not once per issue. | read-only, idempotent |
 | `searchHotspots` | Searches security hotspots — security-sensitive code awaiting a human decision, a separate list from issues — with each one's vulnerability probability. | read-only, idempotent |
 | `getHotspot` | One hotspot in full: the risk, what an attacker could do, how to make it safe, the review history, and `canChangeStatus`. | read-only, idempotent |
@@ -37,12 +40,19 @@ SonarQube Server — the self-hosted and Data Center editions — is explicitly 
 | `assignIssue` | Assigns an issue to a login, or clears the assignee. `__me__` assigns to the token's own account. | write, **not** destructive, idempotent |
 | `addIssueComment` | Posts a comment on an issue. Two calls make two comments. | write, **not** destructive |
 | `setHotspotStatus` | Records a hotspot review: `REVIEWED` with `SAFE` or `FIXED`, or `TO_REVIEW` to put it back on the list, with a justification comment. | write, **not** destructive, idempotent |
+| `bulkUpdateIssues` | Applies one transition, assignment and/or comment to up to 500 issues at once. SonarQube answers with counts and names no issue, so an illegal transition comes back as `ignored`. | write, **not** destructive |
 
 Every tool is annotated open-world (it talks to a live SonarQube organization) and returns
-structured content. `Destructive` defaults to *true* in the MCP SDK, so all four write tools say
+structured content. `Destructive` defaults to *true* in the MCP SDK, so all five write tools say
 otherwise explicitly — none of them deletes anything, and every one is reversible or additive. The
-full annotation table, and the four rows that are judgement calls rather than readings of the API,
+full annotation table, and the five rows that are judgement calls rather than readings of the API,
 are in [AGENTS.md](AGENTS.md#tool-table).
+
+Two conventions are worth knowing before the first call, because both fail *silently*. **An issue
+key belongs to one analysis scope**: pass `getIssue` the same `projectKey` and `branch`/`pullRequest`
+the search that produced the key used, or SonarQube reports the issue as missing rather than as out
+of scope. And **numbers are only as fresh as the last analysis** — after a push, `getAnalysisStatus`
+before trusting a gate, an issue list or a measure.
 
 ## Install
 
@@ -66,7 +76,7 @@ named `sonarqube-mcp-{version}-{rid}` and contains the executable, `LICENSE` and
 | macOS Apple silicon | `osx-arm64` | `sonarqube-mcp-{version}-osx-arm64.tar.gz` |
 
 ```bash
-tar -xzf sonarqube-mcp-1.0.0-linux-x64.tar.gz
+tar -xzf sonarqube-mcp-1.1.0-linux-x64.tar.gz
 chmod +x sonarqube-mcp
 ./sonarqube-mcp --version
 ```
@@ -92,7 +102,7 @@ downloads and runs it in one step, so there is nothing to install and nothing to
 hand:
 
 ```bash
-dnx mcp-sonarqube@1.0.0 --yes status
+dnx mcp-sonarqube@1.1.0 --yes status
 ```
 
 `--yes` accepts the download prompt and is consumed by `dnx` itself; everything after it is passed
@@ -105,7 +115,7 @@ speaks MCP over stdio, which is how a client should launch it:
     "sonarqube": {
       "type": "stdio",
       "command": "dnx",
-      "args": ["mcp-sonarqube@1.0.0", "--yes"],
+      "args": ["mcp-sonarqube@1.1.0", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "...",
         "SONARQUBE_ORG": "my-org"
@@ -115,7 +125,7 @@ speaks MCP over stdio, which is how a client should launch it:
 }
 ```
 
-Pin the version (`@1.0.0`) rather than floating: an MCP server is something an agent runs on your
+Pin the version (`@1.1.0`) rather than floating: an MCP server is something an agent runs on your
 behalf, and a pinned version is one you decided to run. This half is framework-dependent, so it
 needs the .NET 10 SDK — if a client reports *the command "dnx" was not found*, that is what is
 missing.
@@ -266,7 +276,7 @@ the authority when this table and the binary disagree.
 | `SONARQUBE_ORG` | — | Organization key — the last segment of `sonarcloud.io/organizations/{key}`. Required by `listProjects` and `getRule` only. |
 | `SONARQUBE_URL` | `https://sonarcloud.io` | Base URL. Only `sonarcloud.io` and `sonarqube.us` over `https` are accepted; anything else is ignored with a warning on stderr. |
 | `SONARQUBE_MCP_DEFAULT_PROJECT` | — | Default for the `projectKey` tool argument. The `id` in a project URL, not the repository name. |
-| `SONARQUBE_MCP_READ_ONLY` | `0` | `1` registers only the fifteen read tools; the four write tools are absent from `tools/list`. Accepts `1/true/yes/on` and `0/false/no/off`. |
+| `SONARQUBE_MCP_READ_ONLY` | `0` | `1` registers only the eighteen read tools; the five write tools are absent from `tools/list`. Accepts `1/true/yes/on` and `0/false/no/off`. |
 | `SONARQUBE_MCP_LOG_LEVEL` | `Information` | Minimum level for the stderr logger: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. |
 | `SONARQUBE_MCP_MAX_PAGE_SIZE` | `100` | Ceiling on a tool's `pageSize`, 1–500. 500 is the API's own hard limit. |
 | `SONARQUBE_MCP_DEFAULT_PAGE_SIZE` | `50` | The `pageSize` a tool uses when the call omits it. Clamped to the ceiling above. |
@@ -331,7 +341,7 @@ Triaging a pull request whose gate has gone red, end to end:
    issue will accept right now — a transition that is not legal from the current state is a 400.
    The change is immediate and visible to everyone in the organization, and it is reversible:
    `reopen` undoes it and the issue's changelog records who did what. If a model should not be able
-   to do this at all, set `SONARQUBE_MCP_READ_ONLY=1` and the four write tools are never registered
+   to do this at all, set `SONARQUBE_MCP_READ_ONLY=1` and the five write tools are never registered
    — not refused when called, absent from `tools/list` entirely.
 
 Two more passes worth knowing, both described in full in the shipped skill:
@@ -349,7 +359,7 @@ Two more passes worth knowing, both described in full in the shipped skill:
 
 ```
 $ sonarqube-mcp status
-sonarqube-mcp 1.0.0
+sonarqube-mcp 1.1.0
 
 Configuration
   Base URL:          https://sonarcloud.io

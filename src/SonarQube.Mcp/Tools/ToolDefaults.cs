@@ -68,6 +68,62 @@ internal static class ToolDefaults
     /// <summary>The default <c>sections</c> of <c>getRule</c>: what it is, why, and how to fix it.</summary>
     internal static readonly string[] DefaultRuleSections = ["introduction", "root_cause", "how_to_fix"];
 
+    /// <summary>
+    /// The default groupings of <c>summarizeIssues</c>: how bad, which rules, which files.
+    /// </summary>
+    /// <remarks>
+    /// Three rather than all eleven, because every extra grouping is a hundred more buckets in the
+    /// response and the first question of a triage is always the same one.
+    /// </remarks>
+    internal static readonly string[] DefaultIssueGroupings = ["impactSeverities", "rules", "files"];
+
+    /// <summary>The most values SonarQube will accept in one <c>bulk_change</c>.</summary>
+    internal const int MaxBulkIssueKeys = 500;
+
+    /// <summary>
+    /// The groupings <c>summarizeIssues</c> accepts, mapped to the <c>facets</c> spelling the API
+    /// wants.
+    /// </summary>
+    /// <remarks>
+    /// Two of these are renamed rather than passed through. <c>files</c> is <c>fileUuids</c> on the
+    /// wire — the obvious <c>files</c> is a 400, and this server already uses <c>files</c> to mean a
+    /// path on <c>searchHotspots</c>, so the tool boundary keeps one word for one idea. And
+    /// <c>authors</c> is the singular <c>author</c>, which is the sort of thing a model has no way to
+    /// guess.
+    /// </remarks>
+    private static readonly Dictionary<string, string> IssueGroupings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["rules"] = "rules",
+        ["files"] = "fileUuids",
+        ["directories"] = "directories",
+        ["tags"] = "tags",
+        ["languages"] = "languages",
+        ["assignees"] = "assignees",
+        ["authors"] = "author",
+        ["issueStatuses"] = "issueStatuses",
+        ["impactSeverities"] = "impactSeverities",
+        ["impactSoftwareQualities"] = "impactSoftwareQualities",
+        ["cleanCodeAttributeCategories"] = "cleanCodeAttributeCategories",
+    };
+
+    /// <summary>
+    /// Legacy grouping names the API still accepts, mapped to the modern one this server exposes.
+    /// </summary>
+    /// <remarks>
+    /// These are rejected rather than translated, for the same reason the legacy severities are
+    /// (see the class remarks): a caller who asked for <c>types</c> and silently received clean-code
+    /// qualities cannot tell which vocabulary the numbers are in.
+    /// </remarks>
+    private static readonly Dictionary<string, string> LegacyIssueGroupings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["severities"] = "impactSeverities",
+        ["types"] = "impactSoftwareQualities",
+        ["statuses"] = "issueStatuses",
+        ["resolutions"] = "issueStatuses",
+        ["fileUuids"] = "files",
+        ["author"] = "authors",
+    };
+
     /// <summary>The modern issue statuses. The legacy set is rejected with a mapping, not silently translated.</summary>
     private static readonly string[] IssueStatuses =
         ["OPEN", "CONFIRMED", "FALSE_POSITIVE", "ACCEPTED", "FIXED"];
@@ -125,6 +181,165 @@ internal static class ToolDefaults
             "the `id` parameter in a sonarcloud.io project URL (for example myorg_myrepo), not the repository " +
             "name — or set " + DefaultProjectVariable + " in the environment the MCP client launches this " +
             "server with. Call listProjects to see which keys this organization has.");
+    }
+
+    /// <summary>
+    /// Resolves the project a single-entity read belongs to, which may legitimately be unknown on the
+    /// main branch but is mandatory the moment a branch or pull request is named.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// SonarQube Cloud only honours the <c>issues=</c> key filter inside the scope named by
+    /// <c>componentKeys</c>. Send a key together with <c>pullRequest</c> and nothing else and the
+    /// scope argument is quietly ignored, the search falls back to the main branch, and the answer is
+    /// <c>200</c> with <c>total: 0</c> — indistinguishable from a key that does not exist. So a
+    /// scoped lookup that cannot name its project is refused here rather than being sent and
+    /// mis-reported as "not found".
+    /// </para>
+    /// <para>
+    /// Unscoped, the project is optional: a main-branch key resolves on its own, and requiring
+    /// <c>SONARQUBE_MCP_DEFAULT_PROJECT</c> for a call that works without it would be a regression.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="McpException">A branch or pull request was named and no project could be resolved.</exception>
+    internal static string? ResolveScopedProject(string? projectKey, SonarQubeMcpOptions options, AnalysisScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var resolved = !string.IsNullOrWhiteSpace(projectKey)
+            ? projectKey.Trim()
+            : string.IsNullOrWhiteSpace(options.DefaultProject) ? null : options.DefaultProject;
+
+        if (resolved is not null)
+        {
+            return resolved;
+        }
+
+        if (scope.Branch is null && scope.PullRequest is null)
+        {
+            return null;
+        }
+
+        var named = scope.PullRequest is not null
+            ? "pullRequest " + scope.PullRequest
+            : "branch " + scope.Branch;
+
+        throw new McpException(
+            "Reading one issue on a " + named + " needs the project it belongs to as well: SonarQube only " +
+            "applies a branch or pullRequest filter to a key lookup when the project is named alongside it, " +
+            "and without it the lookup silently falls back to the main branch and finds nothing. Pass " +
+            "projectKey — the `id` parameter in a sonarcloud.io project URL — or set " + DefaultProjectVariable +
+            " in the environment the MCP client launches this server with.");
+    }
+
+    /// <summary>
+    /// Validates the requested groupings and returns them in the caller's own vocabulary, in the
+    /// order they were asked for.
+    /// </summary>
+    /// <exception cref="McpException">A grouping is not one this server exposes.</exception>
+    internal static IReadOnlyList<string> ResolveIssueGroupings(string[]? groupBy)
+    {
+        var cleaned = CleanList(groupBy);
+
+        if (cleaned is null)
+        {
+            return DefaultIssueGroupings;
+        }
+
+        var resolved = new List<string>(cleaned.Count);
+
+        foreach (var requested in cleaned)
+        {
+            if (LegacyIssueGroupings.TryGetValue(requested, out var modern))
+            {
+                throw new McpException(
+                    $"'{requested}' is not a grouping this server exposes; use '{modern}'. The two " +
+                    "vocabularies do not line up value for value, so translating silently would leave the " +
+                    "counts unreadable.");
+            }
+
+            if (!IssueGroupings.ContainsKey(requested))
+            {
+                throw new McpException(
+                    $"'{requested}' is not a grouping. Accepted values are " +
+                    string.Join(", ", IssueGroupings.Keys.Order(StringComparer.Ordinal)) + ".");
+            }
+
+            // The lookup is case-insensitive, so its own key is the canonical spelling of whatever
+            // case the caller used, and the result echoes one form however it was asked for.
+            var key = IssueGroupings.Keys.First(candidate =>
+                string.Equals(candidate, requested, StringComparison.OrdinalIgnoreCase));
+
+            if (!resolved.Contains(key, StringComparer.Ordinal))
+            {
+                resolved.Add(key);
+            }
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Resolves what a summary counts: issues, or SonarQube's estimated remediation minutes.
+    /// </summary>
+    /// <remarks>
+    /// The API spells this <c>facetMode</c> and returns the minutes in a field still called
+    /// <c>count</c>, so the result record labels the unit rather than leaving a caller to assume.
+    /// </remarks>
+    /// <returns><see langword="true"/> for effort mode.</returns>
+    /// <exception cref="McpException">The value is neither <c>issues</c> nor <c>effort</c>.</exception>
+    internal static bool ResolveIssueCountMode(string? countBy)
+    {
+        if (string.IsNullOrWhiteSpace(countBy))
+        {
+            return false;
+        }
+
+        var trimmed = countBy.Trim();
+
+        if (string.Equals(trimmed, "issues", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "count", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(trimmed, "effort", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        throw new McpException(
+            $"countBy must be 'issues' or 'effort'; got '{trimmed}'. effort counts SonarQube's estimated " +
+            "remediation minutes instead of issues, which ranks a few expensive findings above many cheap ones.");
+    }
+
+    /// <summary>The <c>facets</c> value the API wants for one of this server's grouping names.</summary>
+    internal static string FacetWireName(string groupBy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupBy);
+
+        return IssueGroupings.TryGetValue(groupBy, out var wire) ? wire : groupBy;
+    }
+
+    /// <summary>
+    /// Validates the issue keys a bulk change addresses.
+    /// </summary>
+    /// <exception cref="McpException">The list is empty or longer than the endpoint accepts.</exception>
+    internal static IReadOnlyList<string> RequireIssueKeys(string[]? issueKeys)
+    {
+        var cleaned = CleanList(issueKeys) ?? throw new McpException(
+            "issueKeys is required and must hold at least one key, as searchIssues reports them. " +
+            "To change a single issue, transitionIssue and assignIssue report what the issue ended up in; " +
+            "this one reports counts only.");
+
+        if (cleaned.Count > MaxBulkIssueKeys)
+        {
+            throw new McpException(
+                $"{cleaned.Count} issue keys were given and SonarQube accepts at most {MaxBulkIssueKeys} in " +
+                "one call. Split the change into batches.");
+        }
+
+        return cleaned;
     }
 
     /// <summary>

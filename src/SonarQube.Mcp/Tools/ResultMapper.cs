@@ -24,6 +24,12 @@ namespace SonarQube.Mcp.Tools;
 /// </remarks>
 internal static class ResultMapper
 {
+    /// <summary>
+    /// SonarQube's own per-facet value cap. It is applied with no marker in the response, so a facet
+    /// that comes back at exactly this size is reported as truncated.
+    /// </summary>
+    private const int FacetValueCap = 100;
+
     /// <summary>The lookup for a response that carried no <c>rules[]</c> sidecar.</summary>
     private static readonly IReadOnlyDictionary<string, string> NoRuleNames =
         new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1069,6 +1075,335 @@ internal static class ResultMapper
     }
 
     /// <summary>Builds the rule-key-to-name map the issue mappers join on.</summary>
+    /// <summary>
+    /// Turns the facet arrays into grouped counts a model can read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three translations happen here and each one exists because the raw shape is misleading. The
+    /// <c>fileUuids</c> facet reports internal UUIDs, joined back to paths through the response's own
+    /// component sidecar. The <c>rules</c> facet reports rule keys, labelled with rule names from the
+    /// <c>rules</c> sidecar when it was asked for. And the <c>assignees</c> facet uses the
+    /// <b>empty string</b> for unassigned issues, which would otherwise render as a nameless bucket.
+    /// </para>
+    /// <para>
+    /// The facets come back in the order they were requested rather than the order SonarQube listed
+    /// them, and each is marked truncated at the endpoint's hundred-value cap — a cap SonarQube
+    /// applies with no marker of its own.
+    /// </para>
+    /// </remarks>
+    /// <param name="response">The search response, which carried <c>facets</c>.</param>
+    /// <param name="requested">The groupings that were asked for, in the caller's vocabulary.</param>
+    /// <param name="scope">The branch or pull request the counts are for.</param>
+    /// <param name="project">The project the counts are for.</param>
+    /// <param name="effortMode">Whether the counts are remediation minutes rather than issues.</param>
+    /// <param name="baseUrl">The server base URL, for the composed link.</param>
+    internal static IssueSummaryResult IssueSummary(
+        IssuesSearchResponseDto response,
+        IReadOnlyList<string> requested,
+        AnalysisScope scope,
+        string project,
+        bool effortMode,
+        string baseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(requested);
+
+        var paths = ComponentKeys.BuildUuidPathMap(response.Components);
+        var ruleNames = RuleNames(response.Rules);
+        var facets = new List<IssueFacet>(requested.Count);
+
+        foreach (var groupBy in requested)
+        {
+            var wireName = ToolDefaults.FacetWireName(groupBy);
+            var facet = response.Facets?.FirstOrDefault(candidate =>
+                string.Equals(candidate.Property, wireName, StringComparison.Ordinal));
+
+            var values = facet?.Values ?? [];
+            var buckets = new List<IssueFacetBucket>(values.Count);
+
+            foreach (var value in values)
+            {
+                buckets.Add(new IssueFacetBucket
+                {
+                    Value = FacetValue(groupBy, value.Val, paths),
+                    Label = FacetLabel(groupBy, value.Val, ruleNames),
+                    Count = value.Count.GetValueOrDefault(),
+                });
+            }
+
+            buckets.Sort(static (left, right) => right.Count.CompareTo(left.Count));
+
+            facets.Add(new IssueFacet
+            {
+                GroupBy = groupBy,
+                Buckets = buckets,
+                Truncated = buckets.Count >= FacetValueCap,
+            });
+        }
+
+        return new IssueSummaryResult
+        {
+            ProjectKey = project,
+            Branch = scope.Branch,
+            PullRequest = scope.PullRequest,
+            MatchingIssues = response.Total.GetValueOrDefault(),
+            TotalEffortMinutes = response.EffortTotal,
+            CountedIn = effortMode ? "remediationMinutes" : "issues",
+            Facets = facets,
+            Note = SummaryNote(facets, effortMode),
+            Url = ComponentKeys.ProjectUrl(baseUrl, project, scope),
+        };
+    }
+
+    /// <summary>Renders one facet value, translating the ones that are not human-readable as sent.</summary>
+    private static string FacetValue(
+        string groupBy,
+        string? value,
+        IReadOnlyDictionary<string, string> paths)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            // The assignees facet buckets unassigned issues under the empty string.
+            return string.Equals(groupBy, "assignees", StringComparison.Ordinal) ? "(unassigned)" : "(none)";
+        }
+
+        return string.Equals(groupBy, "files", StringComparison.Ordinal)
+            ? paths.TryGetValue(value, out var path) ? path : value
+            : value;
+    }
+
+    /// <summary>The human-readable expansion of a facet value, when the response carried one.</summary>
+    private static string? FacetLabel(
+        string groupBy,
+        string? value,
+        IReadOnlyDictionary<string, string> ruleNames)
+    {
+        if (!string.Equals(groupBy, "rules", StringComparison.Ordinal) || string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        return ruleNames.TryGetValue(value, out var name) ? name : null;
+    }
+
+    /// <summary>
+    /// Says the two things about these numbers a caller cannot see: that a truncated facet is not
+    /// the whole list, and that a facet ignores its own filter.
+    /// </summary>
+    private static string SummaryNote(IReadOnlyList<IssueFacet> facets, bool effortMode)
+    {
+        var notes = new List<string>(3);
+
+        var truncated = facets.Where(facet => facet.Truncated).Select(facet => facet.GroupBy).ToArray();
+
+        if (truncated.Length > 0)
+        {
+            notes.Add(
+                "SonarQube caps a grouping at " + FacetValueCap.ToString(CultureInfo.InvariantCulture) +
+                " values and " + string.Join(", ", truncated) + " reached it, so the smallest buckets are " +
+                "missing; narrow the search to see them.");
+        }
+
+        notes.Add(
+            "Each grouping is computed with its own filter removed, so counts under a field the search " +
+            "also filtered on describe the search without that one filter and will not add up to " +
+            "matchingIssues.");
+
+        if (effortMode)
+        {
+            notes.Add("Counts are estimated remediation minutes, not issue counts.");
+        }
+
+        return string.Join(" ", notes);
+    }
+
+    /// <summary>
+    /// Maps an issue's changelog, oldest first.
+    /// </summary>
+    /// <param name="response">The changelog response.</param>
+    /// <param name="issueKey">The issue the history belongs to.</param>
+    /// <param name="project">The project, for the composed link.</param>
+    /// <param name="authenticated">Whether a credential is configured; an empty list means different things without one.</param>
+    /// <param name="baseUrl">The server base URL.</param>
+    internal static IssueChangelogResult Changelog(
+        IssueChangelogResponseDto response,
+        string issueKey,
+        string? project,
+        bool authenticated,
+        string baseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        var entries = new List<IssueChangeEntry>(response.Changelog?.Count ?? 0);
+
+        foreach (var entry in response.Changelog ?? [])
+        {
+            var diffs = new List<IssueChangeDiff>(entry.Diffs?.Count ?? 0);
+
+            foreach (var diff in entry.Diffs ?? [])
+            {
+                diffs.Add(new IssueChangeDiff
+                {
+                    Field = diff.Key,
+                    From = diff.OldValue,
+                    To = diff.NewValue,
+                });
+            }
+
+            entries.Add(new IssueChangeEntry
+            {
+                Date = entry.CreationDate,
+                Author = entry.User,
+                AuthorName = entry.UserName,
+                Changes = diffs,
+            });
+        }
+
+        string? note = null;
+
+        if (entries.Count == 0)
+        {
+            note = authenticated
+                ? "No recorded changes: nobody has transitioned, assigned or re-tagged this issue since it was raised."
+                : "No recorded changes - but this server has no token configured, and SonarQube answers an " +
+                  "anonymous changelog request with an empty list rather than refusing it, so this cannot be " +
+                  "read as nothing having happened. Set SONARQUBE_TOKEN and restart to see the history.";
+        }
+
+        return new IssueChangelogResult
+        {
+            IssueKey = issueKey,
+            Entries = entries,
+            Note = note,
+            Url = ComponentKeys.IssueUrl(baseUrl, project, issueKey, default),
+        };
+    }
+
+    /// <summary>
+    /// Maps the Compute Engine's queue and last task, and says what the state means.
+    /// </summary>
+    /// <param name="response">The <c>ce/component</c> response.</param>
+    /// <param name="project">The project the tasks belong to.</param>
+    /// <param name="baseUrl">The server base URL.</param>
+    internal static AnalysisStatusResult AnalysisStatus(
+        CeComponentResponseDto response,
+        string project,
+        string baseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        var pending = (response.Queue ?? []).Select(MapTask).ToArray();
+        var latest = response.Current is null ? null : MapTask(response.Current);
+
+        return new AnalysisStatusResult
+        {
+            ProjectKey = project,
+            AnalysisInProgress = pending.Length > 0,
+            Pending = pending,
+            Latest = latest,
+            Note = AnalysisNote(pending, latest),
+            Url = ComponentKeys.ProjectUrl(baseUrl, project, default),
+        };
+    }
+
+    /// <summary>Maps one Compute Engine task, reconciling the two names for its finish time.</summary>
+    private static AnalysisTask MapTask(CeTaskDto task) => new()
+    {
+        Id = task.Id,
+        Status = task.Status,
+        Branch = task.Branch,
+        PullRequest = task.PullRequest,
+        SubmittedAt = task.SubmittedAt,
+        StartedAt = task.StartedAt,
+
+        // Cloud sends executedAt; the endpoint's published example calls the same field finishedAt.
+        FinishedAt = task.ExecutedAt ?? task.FinishedAt,
+        ExecutionTimeMs = task.ExecutionTimeMs,
+        SubmittedBy = task.SubmitterLogin,
+        ErrorMessage = task.ErrorMessage,
+        ErrorType = task.ErrorType,
+        WarningCount = task.WarningCount,
+        Warnings = task.Warnings ?? [],
+    };
+
+    /// <summary>Turns the task state into the caller's next move, which is the point of the tool.</summary>
+    private static string AnalysisNote(AnalysisTask[] pending, AnalysisTask? latest)
+    {
+        if (pending.Length > 0)
+        {
+            var queued = string.Equals(pending[0].Status, "PENDING", StringComparison.Ordinal);
+
+            return "An analysis of " + ScopeOf(pending[0]) + " is " + (queued ? "queued" : "running") +
+                   ". Quality gate, issue and measure reads answer from the previous analysis until it " +
+                   "finishes, so call this again before trusting them.";
+        }
+
+        if (latest is null)
+        {
+            return "This project has never been analysed, so there are no issues, measures or gate to read yet.";
+        }
+
+        if (string.Equals(latest.Status, "FAILED", StringComparison.Ordinal))
+        {
+            return "The last analysis of " + ScopeOf(latest) + " FAILED, so every measure and gate for it is " +
+                   "stale rather than merely bad. " + (latest.ErrorMessage is { Length: > 0 } message
+                       ? "SonarQube reported: " + message
+                       : "SonarQube reported no message; the scanner log in CI has the detail.");
+        }
+
+        var warnings = latest.WarningCount.GetValueOrDefault() > 0
+            ? " It raised " + latest.WarningCount.GetValueOrDefault().ToString(CultureInfo.InvariantCulture) +
+              " scanner warning(s); reading the texts needs Execute Analysis rights, so look in the CI log."
+            : string.Empty;
+
+        return "Nothing is queued. The last analysis of " + ScopeOf(latest) + " finished with status " +
+               (latest.Status ?? "unknown") + ", so reads reflect it." + warnings;
+    }
+
+    /// <summary>Names the scope a task analysed, main branch included.</summary>
+    private static string ScopeOf(AnalysisTask task) =>
+        task.PullRequest is { Length: > 0 } pullRequest ? "pull request " + pullRequest
+        : task.Branch is { Length: > 0 } branch ? "branch " + branch
+        : "the main branch";
+
+    /// <summary>
+    /// Maps a bulk change's counts, and says what to do about the ones that did not move.
+    /// </summary>
+    /// <param name="response">The <c>bulk_change</c> response.</param>
+    /// <param name="issueKeys">The keys the change was asked for.</param>
+    /// <param name="applied">What was asked for, in the tool's vocabulary.</param>
+    internal static BulkUpdateResult BulkUpdate(
+        BulkChangeResponseDto response,
+        IReadOnlyList<string> issueKeys,
+        IReadOnlyList<string> applied)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        var ignored = response.Ignored.GetValueOrDefault();
+        var failed = response.Failures.GetValueOrDefault();
+
+        string? note = null;
+
+        if (ignored > 0 || failed > 0)
+        {
+            note = "SonarQube reports counts and names no issue, so it cannot say which keys these were. " +
+                   "An ignored issue is usually one the requested transition is not legal from - read the " +
+                   "keys back with getIssue to see each one's availableTransitions.";
+        }
+
+        return new BulkUpdateResult
+        {
+            IssueKeys = issueKeys,
+            Applied = applied,
+            Total = response.Total.GetValueOrDefault(),
+            Changed = response.Success.GetValueOrDefault(),
+            Ignored = ignored,
+            Failed = failed,
+            Note = note,
+        };
+    }
+
     internal static IReadOnlyDictionary<string, string> RuleNames(IReadOnlyList<RuleRefDto>? rules)
     {
         if (rules is null || rules.Count == 0)

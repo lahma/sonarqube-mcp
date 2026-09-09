@@ -101,6 +101,35 @@ store; a test that needs it enqueues a bodiless 204, which is precisely what the
 it. `ToolPayloads.HotspotShowWithBothCommentSpellings` carries both spellings by hand, because the
 only way to prove the plural is ignored is to send it.
 
+## Live captures — 2026-09-09 (1.1.0)
+
+Captured anonymously from `https://sonarcloud.io` the same way as the 2026-08-11 set, except where
+a row says otherwise. Pull request **3735** of `quartznet_quartznet` was chosen because it was the
+most recently analysed pull request that still had findings (13 issues); pull-request data is purged
+after about thirty days, so **these three will not re-capture** once that window passes. Re-capture
+against whatever pull request is current instead, and update this table.
+
+| Fixture | Request | Notes |
+|---|---|---|
+| `issues-search-by-key-pullrequest.json` | `GET api/issues/search?issues=AaCDWeEWg4L35vfD5PUF&componentKeys=quartznet_quartznet&pullRequest=3735&additionalFields=transitions,comments,rules,users&ps=1` | **The 1.1.0 bug fix's repro.** The same request without `componentKeys` answers `200` with `total: 0` — see C13. |
+| `ce-component.json` | `GET api/ce/component?component=quartznet_quartznet` | Answers **anonymously** (Browse is enough), unlike `ce/activity` (401) and `ce/activity_status` (403). `current` carries `pullRequest`, `warningCount` and — note the spelling — `executedAt`, where the endpoint's own published response example says `finishedAt`. |
+| `issues-search-facets.json` | `GET api/issues/search?componentKeys=quartznet_quartznet&ps=1&facets=rules,fileUuids,directories,tags,impactSeverities,impactSoftwareQualities,issueStatuses,assignees&additionalFields=rules&impactSeverities=BLOCKER` | **The facet-ignores-its-own-filter case**, and the reason this one is narrowed to `BLOCKER` rather than being the whole project: `total` is 80, while the `impactSeverities` facet reports MEDIUM in the thousands, because SonarQube computes each facet with its own filter removed. `issueStatuses` *does* reflect the filter (66 + 13 + 1 = 80), which is what makes the asymmetry visible in one file. Also carries the empty-string `assignees` bucket for unassigned issues, and the component sidecar that resolves every `fileUuids` value to a path. |
+| `issues-search-facets-pullrequest.json` | `GET api/issues/search?componentKeys=quartznet_quartznet&pullRequest=3735&ps=1&facets=…&additionalFields=rules` | The same eight facets under a pull-request scope. Small, and shows a vocabulary facet returning **zero-count** buckets (`HIGH: 0`). |
+| `issues-changelog-anonymous.json` | `GET api/issues/changelog?issue=AYpZ_apQ1HKzD9aWZHOq` | `{"changelog":[]}` for an issue that is `RESOLVED`/`WONTFIX` and therefore certainly *does* have history — the same anonymous-access restriction that empties a rule's description sections. This is why an empty changelog is reported with a note rather than as "nothing happened". |
+
+### Written by hand from the API's own published response examples
+
+Three shapes could not be captured anonymously, and two of them cannot be captured at all without
+provoking a failure on a real project. Rather than guess at field names, they were taken from
+`api/webservices/response_example`, which is SonarQube's own documentation endpoint — these are API
+facts, retrieved on 2026-09-09, not invented shapes:
+
+| Fixture | Source | Notes |
+|---|---|---|
+| `issues-changelog.json` | `response_example?controller=api/issues&action=changelog`, with the example's placeholder user and dates replaced by this organization's own | Two entries, the first carrying the two diffs a single transition produces (`resolution` and `status`). **Needs re-capturing with a token** to confirm against a live body. |
+| `issues-bulk-change.json` | `response_example?controller=api/issues&action=bulk_change` | `{"total":2,"success":1,"ignored":1,"failures":0}` — counts only. The endpoint names no issue, which is why `bulkUpdateIssues` says so rather than attributing them. |
+| `ce-component-failed.json` | `ce-component.json` with the `status`, `errorMessage`, `errorType` and `hasErrorStacktrace` fields of `response_example?controller=api/ce&action=component`'s failed task | The `FAILED` branch of `getAnalysisStatus`. A real capture would need a deliberately broken analysis on a public project. |
+
 ## Corrections to the implementation design found while capturing
 
 These were found against the pre-implementation design document (since folded into `AGENTS.md`,

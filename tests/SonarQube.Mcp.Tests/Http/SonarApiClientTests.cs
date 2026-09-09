@@ -1351,8 +1351,16 @@ public class SonarApiClientTests
         // missing from SonarWireJsonContext throws rather than quietly falling back.
         object? value = fixture switch
         {
-            "issues-search-page.json" or "issues-search-empty.json" or "issues-search-single.json" =>
+            "issues-search-page.json" or "issues-search-empty.json" or "issues-search-single.json"
+                or "issues-search-facets.json" or "issues-search-facets-pullrequest.json"
+                or "issues-search-by-key-pullrequest.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssuesSearchResponseDto),
+            "issues-changelog.json" or "issues-changelog-anonymous.json" =>
+                JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssueChangelogResponseDto),
+            "issues-bulk-change.json" =>
+                JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.BulkChangeResponseDto),
+            "ce-component.json" or "ce-component-failed.json" =>
+                JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.CeComponentResponseDto),
             "issues-do_transition.json" or "issues-assign.json" or "issues-add_comment.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssueOperationResponseDto),
             "hotspots-search-page.json" =>

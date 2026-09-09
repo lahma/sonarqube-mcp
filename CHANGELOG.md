@@ -1,3 +1,44 @@
+# 1.1.0
+
+- **Fixed: `getIssue` could not read a pull request's or a branch's issue at all.** SonarQube Cloud
+  only honours the `issues=` key filter inside the scope named by `componentKeys`, so a lookup that
+  passed `pullRequest` alone had the scope silently ignored, fell back to the main branch, and
+  answered `200` with an empty list - which the tool reported as "no issue with that key". Verified
+  live on 2026-09-09. `getIssue` now takes an optional `projectKey`, defaulted from
+  `SONARQUBE_MCP_DEFAULT_PROJECT`, and sends it; a scoped lookup with no project to name is refused
+  before the request leaves the process instead of coming back as a phantom 404. The not-found
+  message now also names `getHotspot`, because a hotspot key is shaped exactly like an issue key.
+- `getAnalysisStatus` reads SonarQube's Compute Engine queue: what is queued or running, and the
+  last analysis that finished, each with the branch or pull request it was for. A scanner step going
+  green in CI only means the report was uploaded - until SonarQube finishes processing it, the
+  quality gate, the issue list and every measure answer from the previous analysis without saying
+  so. It is also the only place a failed analysis and its error message are visible, which is the
+  difference between numbers that are bad and numbers that are stale.
+- `summarizeIssues` counts a project's issues grouped by rule, file, directory, severity, quality,
+  status, tag, language, assignee or author in a single call, instead of paging toward the API's
+  10000-result ceiling. Files are reported as paths rather than the component UUIDs the API returns,
+  rule keys carry their titles, a grouping that hits SonarQube's hundred-value cap is flagged
+  `truncated`, and the result says plainly that each grouping is computed with its own filter
+  removed - so those counts describe the search without that one filter and do not add up to
+  `matchingIssues`. `countBy: "effort"` counts estimated remediation minutes instead.
+- `getIssueChangelog` returns who changed an issue's status, resolution or assignee, when, and from
+  what - the history to read before re-deciding something a reviewer already decided. It takes the
+  key alone and is not scope-sensitive. An empty history from a server with no token means the
+  history could not be read rather than that nothing happened, and the result says which.
+- `bulkUpdateIssues` applies one transition, assignment and/or comment to up to 500 issues in one
+  call. It is annotated non-destructive and non-idempotent, and it is a write tool, so
+  `SONARQUBE_MCP_READ_ONLY` removes it along with the other four. SonarQube answers with counts and
+  names no issue, so an issue the transition was not legal from comes back as `ignored`; the result
+  says so and points at `getIssue`.
+- The server instructions gained the two conventions whose failure modes are silent: an issue key
+  belongs to one analysis scope, and numbers are only as fresh as the last analysis. The shipped
+  agent skill gained a pull-request-analysed-in-CI playbook covering the same ground.
+- Dependencies: `ModelContextProtocol` 2.1.0 to 2.2.0 (the pin stays exact),
+  `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console` 10.0.10 to
+  10.0.12, `Microsoft.NET.Test.Sdk` 18.8.1 to 18.10.0. xunit stays on 3.x deliberately - version 4
+  drops the VSTest mode the build's test reporting depends on - and Fallout stays on 10.4.0, which
+  is the stable channel and a superset of the 11.0.x edge line.
+
 # 1.0.0
 
 Initial release.

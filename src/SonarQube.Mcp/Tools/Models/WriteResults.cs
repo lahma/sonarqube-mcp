@@ -116,3 +116,36 @@ internal sealed record HotspotStatusResult
     /// <summary>The hotspot's page in SonarQube.</summary>
     public string? Url { get; init; }
 }
+
+/// <summary>
+/// The result of <c>bulkUpdateIssues</c>.
+/// </summary>
+/// <remarks>
+/// SonarQube reports four counts and names no issue, so a non-zero <see cref="Ignored"/> or
+/// <see cref="Failed"/> cannot be attributed here: the result says so and points at the tool that
+/// can. <see cref="Ignored"/> is the ordinary outcome of asking for a transition an issue cannot
+/// take, not an error.
+/// </remarks>
+internal sealed record BulkUpdateResult
+{
+    /// <summary>The keys the change was requested for.</summary>
+    public IReadOnlyList<string> IssueKeys { get; init; } = [];
+
+    /// <summary>What was asked for, in the tool's own vocabulary.</summary>
+    public IReadOnlyList<string> Applied { get; init; } = [];
+
+    /// <summary>How many issues SonarQube addressed.</summary>
+    public int Total { get; init; }
+
+    /// <summary>How many actually changed.</summary>
+    public int Changed { get; init; }
+
+    /// <summary>How many the change did not apply to — usually an illegal transition.</summary>
+    public int Ignored { get; init; }
+
+    /// <summary>How many failed outright.</summary>
+    public int Failed { get; init; }
+
+    /// <summary>What to do about the ones that did not change.</summary>
+    public string? Note { get; init; }
+}

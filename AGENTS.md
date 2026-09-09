@@ -44,7 +44,7 @@ to audit — treat that as a hard constraint, not a preference.
 6. LF line endings everywhere (`.gitattributes` enforces it). `TreatWarningsAsErrors` is on —
    the compiler and analyzers are the lint step.
 
-## Design decisions (D1–D26)
+## Design decisions (D1–D30)
 
 | # | Decision |
 |---|---|
@@ -70,10 +70,15 @@ to audit — treat that as a hard constraint, not a preference.
 | D20 | **`projectKey` is optional everywhere, defaulted from `SONARQUBE_MCP_DEFAULT_PROJECT`.** An MCP server is configured per checkout in practice, and the Sonar project key is not guessable from the directory name — pinning it in the environment removes the single most common source of 404s. Neither set is an `McpException` naming the variable and pointing at `listProjects`. |
 | D21 | **`component` accepts a path or a key.** `ToolDefaults.ResolveComponent` takes `src/Widget.cs`, `src\Widget.cs`, `./src/Widget.cs` or the full `proj:src/Widget.cs` and normalises to the key form; `ResolveComponentPath` does the inverse for `searchHotspots`, whose `files` parameter takes the project-relative path (C12). The model has file paths, never component keys, and the failure mode of getting it wrong is an empty result rather than an error. |
 | D22 | **The MQR taxonomy is the only vocabulary at the tool boundary.** `issueStatuses` (`OPEN, CONFIRMED, FALSE_POSITIVE, ACCEPTED, FIXED`), `impactSeverities` (`INFO, LOW, MEDIUM, HIGH, BLOCKER`) and `impactSoftwareQualities` (`MAINTAINABILITY, RELIABILITY, SECURITY`). The legacy spellings a model reaches for — `MINOR`/`MAJOR`/`CRITICAL`, `BUG`/`CODE_SMELL`/`VULNERABILITY`, `REOPENED`/`RESOLVED`/`CLOSED` — are **rejected with the mapping in the message**, not silently translated. Translating would hide which vocabulary the caller is in; the API's own 400 lists the accepted values without saying which one means what was asked for. |
-| D23 | **Read-only mode is the absence of a registration.** `SONARQUBE_MCP_READ_ONLY` makes `McpServerSetup.ToolTypesFor` return three tool classes instead of four, so the four write tools never appear in `tools/list`. It is not a check inside a tool: a model must not be able to propose a call the server would then refuse. `SmokeTest`'s second leg is the end-to-end proof. |
+| D23 | **Read-only mode is the absence of a registration.** `SONARQUBE_MCP_READ_ONLY` makes `McpServerSetup.ToolTypesFor` return three tool classes instead of four, so the five write tools never appear in `tools/list`. It is not a check inside a tool: a model must not be able to propose a call the server would then refuse. `SmokeTest`'s second leg is the end-to-end proof. |
 | D24 | **Writes are `application/x-www-form-urlencoded` `ByteArrayContent`**, built by `Http/FormBody.cs` — deliberately not `FormUrlEncodedContent`. `RetryHandler.IsResendable` recognises `ByteArrayContent`, which is exactly what makes a write replayable after a 429. SonarQube rejects a JSON body and ignores query parameters on these endpoints, so this is also the only encoding that works. |
 | D25 | **Measures are strings, absence is not zero, and ratings are letters.** Every measure value arrives as a string, including for `INT` and `PERCENT`; new-code numbers live in `periods[0].value` and never in `value`; a metric with no data is *silently omitted* from the response. `MeasureFormatting` therefore lifts `newCodeValue` out of the period, translates `*_rating` `"1.0"`–`"5.0"` to `A`–`E`, and diffs what was asked for against what came back into `missingMetrics`. A model reading an absent `coverage` as 0% instead of "not measured" draws the opposite conclusion from the truth. |
 | D26 | **Rule and hotspot prose is HTML, converted by hand, and truncation is visible.** `getRule` reads `rules/search?rule_key=…&f=descriptionSections` (C1 — `rules/show` has no `f` on Cloud), and `HtmlToText` (~90 lines, no dependency) unescapes entities, fences `<pre><code>`, bullets `<li>`, breaks on `<p>`/`<h*>`/`<br>` and drops the rest. Sections are capped at `ToolDefaults.MaxRuleSectionChars` with a visible marker and a `truncated` flag on the result. Sections are returned in the order they were *asked for*, not the order the API listed them, and one key can appear more than once — a per-framework rule answers `how_to_fix` once per `context`, which is the only thing telling the copies apart. A response with no sections at all means the request went out without a credential (see *API gotchas*) and is reported as a `note`, not as an error. |
+
+| D27 | **A key filter is scoped, so a single-entity read has to name its project.** SonarQube Cloud only honours `issues/search`'s `issues=` filter inside the scope named by `componentKeys`; supply a key and `pullRequest` and nothing else and the scope argument is *silently* dropped, the search runs against the main branch, and the answer is `200` with `total: 0` (C13). `getIssue` therefore takes an optional `projectKey`, defaulted from `SONARQUBE_MCP_DEFAULT_PROJECT`, and sends it as `componentKeys` whenever one resolves — harmless unscoped, load-bearing scoped. `ToolDefaults.ResolveScopedProject` refuses a scoped lookup it cannot name a project for **before the request is sent**, because the alternative is reporting a real issue as missing. Main-branch reads with no project configured keep working, because those genuinely do. |
+| D28 | **Aggregation is its own tool, not a parameter.** `summarizeIssues` exists rather than a `facets` argument on `searchIssues` for two reasons: `searchIssues` already carries eighteen parameters and every one of them is read on every call, and the two tools answer different questions — one returns issues and pages, the other returns whole-result counts and cannot page. Keeping them apart is also what lets `ToolSchemaTests` assert that `summarizeIssues` carries **none** of the paging envelope, which would otherwise invite a second request that returns identical counts. Its `matchingIssues` is deliberately not called `totalCount`: that name is the envelope's. |
+| D29 | **`bulkUpdateIssues` exposes transition, assignment and comment, and nothing else.** `issues/bulk_change` also offers `set_severity` and `set_type`, which speak the legacy vocabulary D22 rejects at the tool boundary, and `add_tags`/`remove_tags`, which have no single-issue counterpart in this server — exposing tag writing only in the bulk tool would leave the surface asymmetric, and a model would reach for it to do things one issue at a time. The response is four counts naming no issue, so `ignored` and `failed` are reported as counts with a pointer to `getIssue` rather than attributed to keys this server cannot identify. |
+| D30 | **`getAnalysisStatus` reports, and never waits.** It is one call that returns the queue and the last finished task; it does not poll, sleep or retry until an analysis completes. A tool that blocked for the length of a Compute Engine run would hold the client's request open for minutes with no progress channel and no way to cancel meaningfully, and the client is in a far better position to decide how long to wait and what to do meanwhile. It is annotated `ReadOnly`/`Idempotent` — which is a claim about *effects*, not about a stable answer; that its answer changes between calls is the entire point, and the description says so. `ce/activity` (401 anonymously, project-admin with a token) and `ce/activity_status` (403) are out of the budget. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -95,7 +100,7 @@ oversight. They are **v1.1 candidates**, not rejections:
   and for free.
 
 Other locked choices worth restating. Tool names are **camelCase verbNoun**
-(`getQualityGateStatus`) via `[McpServerTool(Name = …)]`, with a sentence-case `Title`. All nineteen
+(`getQualityGateStatus`) via `[McpServerTool(Name = …)]`, with a sentence-case `Title`. All twenty-three
 are `OpenWorld = true` and `UseStructuredContent = true`. `Destructive` defaults to **true** in the
 SDK, so a non-destructive write must set it explicitly `false`, and a read tool must not set it at
 all (`ReadOnly` already says it changes nothing, and `ToolInventoryTests` asserts the hint's
@@ -113,7 +118,7 @@ of these four flags against what an MCP client actually receives, `Build.cs`'s `
 asserts the names again over a real `tools/list` in `SmokeTest`, and `AgentSkillTests` asserts that
 the shipped skill names them too.
 
-`Destructive` is blank on the fifteen read tools deliberately: `ReadOnly` already says they change
+`Destructive` is blank on the eighteen read tools deliberately: `ReadOnly` already says they change
 nothing, so the SDK omits the hint and the test asserts its *absence*. On a write tool it is never
 blank — the SDK's default is `true`, so a non-destructive write that stays silent tells clients to
 prompt before every comment.
@@ -125,8 +130,11 @@ prompt before every comment.
 | `listBranches` | ProjectReadTools | true | — | true | true |
 | `listPullRequests` | ProjectReadTools | true | — | true | true |
 | `getQualityGateStatus` | ProjectReadTools | true | — | true | true |
+| `getAnalysisStatus` | ProjectReadTools | true | — | true | true |
 | `searchIssues` | IssueReadTools | true | — | true | true |
+| `summarizeIssues` | IssueReadTools | true | — | true | true |
 | `getIssue` | IssueReadTools | true | — | true | true |
+| `getIssueChangelog` | IssueReadTools | true | — | true | true |
 | `getRule` | IssueReadTools | true | — | true | true |
 | `searchHotspots` | IssueReadTools | true | — | true | true |
 | `getHotspot` | IssueReadTools | true | — | true | true |
@@ -139,8 +147,9 @@ prompt before every comment.
 | `assignIssue` | IssueWriteTools | false | **false** | true | true |
 | `addIssueComment` | IssueWriteTools | false | **false** | false | true |
 | `setHotspotStatus` | IssueWriteTools | false | **false** | true | true |
+| `bulkUpdateIssues` | IssueWriteTools | false | **false** | **false** | true |
 
-Four of those rows are judgement calls rather than readings of the API. The same arguments are in
+Five of those rows are judgement calls rather than readings of the API. The same arguments are in
 `IssueWriteTools`' class-level `<remarks>`, where they are read by whoever changes the annotations:
 
 - **`transitionIssue` is not destructive.** Every transition it exposes is reversible — `reopen`
@@ -167,20 +176,39 @@ Four of those rows are judgement calls rather than readings of the API. The same
 - **`assignIssue` is idempotent and `addIssueComment` is not.** Assigning the same person twice
   changes nothing; commenting twice makes two comments. Which is why the comment tool's description
   says never to retry a call whose outcome is unknown without reading the issue first.
+- **`bulkUpdateIssues` is not idempotent, for both of the above reasons at once.** It names a
+  transition rather than an end state, and its optional `comment` is appended to every key on every
+  call — including the keys the transition was ignored for. It is non-destructive on exactly
+  `transitionIssue`'s argument, since it is the same transitions applied to more issues.
 
 ## Adding a tool
 
-A new tool has to be added in **five** places, or the build fails:
+A new tool has to be added in **six** places, or the build fails — seven for a write tool. The
+count was five until 1.1.0; `ToolSchemaTests` was always a place a tool had to be listed, but
+nothing checked that it had been, so a new tool silently had no frozen schema.
+`EveryToolHasARowInTheFrozenSchemaTable` closes that, and the list below is now the whole set:
 
 1. The *Tool table* above.
-2. `ToolInventoryTests.ExpectedToolNames`, plus its annotation table.
-3. `Build.cs`'s `ExpectedToolNames`, which `SmokeTest` checks against a live `tools/list`.
-4. `.claude/skills/sonarqube-code-quality/SKILL.md`, in backticks, inside a playbook —
+2. `ToolInventoryTests.ExpectedToolNames`, plus its annotation table (title, and the read or write
+   theory).
+3. `ToolSchemaTests`' `InputSchemaExposesExactlyTheModelSuppliedArguments` table — the frozen
+   parameter list, in declaration order — and either the paginated or the unpaginated paging
+   theory. A tool in neither paging theory is not a failure, but it should be in one of them.
+4. `Build.cs`'s `ExpectedToolNames`, which `SmokeTest` checks against a live `tools/list`.
+5. `.claude/skills/sonarqube-code-quality/SKILL.md`, in backticks, inside a playbook —
    `AgentSkillTests` fails on a tool the skill never mentions as well as on a name no tool answers
    to.
-5. For a **write** tool only: `Build.cs`'s `WriteToolNames`, which is what the read-only leg of
+6. `README.md`'s tool table. Nothing enforces this one; it is the surface a human reads.
+7. For a **write** tool only: `Build.cs`'s `WriteToolNames`, which is what the read-only leg of
    `SmokeTest` asserts the absence of. A write tool missing from that array is a write tool the
    read-only mode is never proven to remove.
+
+A new API *action* additionally needs a row per parameter in `ApiParameterContractTests`'
+`SonarApiParameters.Table` **and** a call in `DriveEveryEndpointAsync` with every optional argument
+supplied — the table is asserted in both directions, so a row nothing sends fails just as loudly as
+a parameter no row covers. A new fixture needs a mapping in
+`EveryEmbeddedFixtureDeserialisesThroughTheSourceGeneratedContext` and a row in
+`Fixtures/MANIFEST.md`.
 
 ## API gotchas
 
@@ -199,6 +227,15 @@ from the fixture manifest.
   `include_internals=true`, yet answers 200. This is a missing *action*, not a missing parameter, so
   a drift test that looks the action up first throws rather than fails. The drift test is therefore
   a **subset** assertion with an explicit `UndocumentedButVerified` list, never an equality.
+- **C13 — the `issues=` key filter is only honoured inside `componentKeys`** (verified 2026-09-09).
+  `issues/search?issues=KEY&pullRequest=N` answers `200` with `total: 0`; adding
+  `componentKeys=<project>` to the identical request answers with the issue. Without a component
+  scope the `pullRequest` (and, by the same mechanism, `branch`) argument is dropped and the search
+  falls back to the main branch, where a pull-request issue does not exist. There is no error and no
+  field saying so, which makes it indistinguishable from a key that was never valid. This is why
+  `getIssue` takes a `projectKey` (D27) and why `searchIssues` was never affected — it always sends
+  `componentKeys`. Measured against `quartznet_quartznet` pull request 3735, key
+  `AaCDWeEWg4L35vfD5PUF`.
 - **C7 — `assignee` means two different things.** `issues/search` returns a **login**
   (`ada@github`); `hotspots/search` returns an internal **UUID**; `hotspots/show` returns a login
   again. Per-endpoint, not per-entity — which is why the result records name them differently
@@ -258,6 +295,37 @@ from the fixture manifest.
   string.
 - **`api/projects/search` needs organization-admin rights.** `components/search` is the
   list-projects endpoint, and it works anonymously on a public organization.
+- **`api/ce/component` answers anonymously; its neighbours do not.** It needs only *Browse*, while
+  `ce/activity` is `401` without a token and needs project-administer rights with one, and
+  `ce/activity_status` is `403` (all verified 2026-09-09). `ce/task`, which is where a scanner
+  warning's *text* lives, needs *Execute Analysis*, so `getAnalysisStatus` reports `warningCount`
+  and points at the CI log rather than expanding it. The endpoint takes **no `branch` or
+  `pullRequest`**: each task in `queue` and `current` reports its own scope.
+- **`ce/component` spells the finish time `executedAt`, its own published response example says
+  `finishedAt`.** Cloud sends the former (verified live); both are deserialised and the mapper takes
+  whichever arrived, because dropping the only field that says the analysis is over would make a
+  finished analysis look like a running one.
+- **A facet is computed with its own filter removed.** `issues/search` narrowed to
+  `impactSeverities=BLOCKER` returned `total: 80` alongside an `impactSeverities` facet reporting
+  MEDIUM in the thousands — the project-wide number — while the `issueStatuses` facet in the *same*
+  response summed to exactly 80 (verified 2026-09-09). This is deliberate on SonarQube's part, so
+  the UI can offer "what if I changed this one filter", and it is a trap in an API client:
+  `summarizeIssues` states it in the tool description and repeats it in every result's `note`.
+- **The facet is spelled `fileUuids`, not `files`**, and `files` is a `400` that helpfully lists the
+  vocabulary. Its values are component **UUIDs**, resolvable to paths through the same response's
+  `components` sidecar, which carries every one of them. The author facet is the singular `author`
+  while the assignee facet is the plural `assignees`, and the latter buckets unassigned issues under
+  the **empty string**. Every facet caps at **100 values** with no marker of its own, and
+  `facetMode=effort` returns remediation minutes in a field still called `count`.
+- **`api/issues/changelog` is not scope-sensitive**, unlike `issues/search`: the key alone resolves a
+  pull-request issue's history. But it is subject to the same anonymous-access restriction as rule
+  descriptions — an anonymous request for an issue that is demonstrably `RESOLVED`/`WONTFIX` answers
+  `200` with `{"changelog":[]}` rather than refusing (verified 2026-09-09). Emptiness is therefore
+  reported with a note, never as "nothing ever happened".
+- **`api/issues/bulk_change` answers with four counts and names no issue** (`total`, `success`,
+  `ignored`, `failures`). A transition that is not legal from an issue's current state lands in
+  `ignored` and does **not** fail the call — so a bulk change that did nothing at all is still a
+  `200`. It caps `issues` at 500.
 
 **Errors and transport**
 
@@ -369,7 +437,7 @@ the README — the schemas arrive with every session anyway, and the README is f
 Complete, as of the initial implementation. Versions are centrally pinned in
 `Directory.Packages.props`, with transitive pinning on.
 
-- `src/SonarQube.Mcp`: `ModelContextProtocol` (pinned **exactly** `[2.1.0]`, because the AOT and
+- `src/SonarQube.Mcp`: `ModelContextProtocol` (pinned **exactly** `[2.2.0]`, because the AOT and
   serializer contract this server depends on — resolver chaining, schema generation, annotation
   defaults — is verified against that one version and a floating range would move it under a
   release), `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.Logging.Console`.
@@ -396,6 +464,24 @@ directions because the runtime accepts a higher assembly version than the one re
 is added to `src/` or `tests/`: the production budget stays at three. Remove once Fallout ships a
 `NuGet.Packaging` new enough to bring 7.9.0 in on its own (Fallout-build/Fallout#638).
 
+**2026-09-09 — version refresh, no ids added or removed.** `ModelContextProtocol` `[2.1.0]` to
+`[2.2.0]`, `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`
+10.0.10 to 10.0.12, `Microsoft.NET.Test.Sdk` 18.8.1 to 18.10.0. Four things were deliberately
+*not* taken, and each will look like an oversight to the next person who checks nuget.org:
+
+- **xunit 4.0.0 and `xunit.runner.visualstudio` 4.0.0.** Version 4 drops VSTest-mode support, and
+  VSTest mode is D11's whole interface: Fallout's `ITest` drives the run through VSTest loggers and
+  parses the result against the VSTest schema, so the bump would quietly degrade CI reporting to
+  pass-or-fail with no error text. Revisit when Fallout's `ITest` speaks the
+  Microsoft.Testing.Platform protocol.
+- **Fallout 11.0.18.** The premise is inverted: `11.0.x` is the **edge** channel and `10.4.0` is
+  stable and functionally newer. It also would not compile — `GitHubActionsAttribute.Env` is used at
+  `build/Build.CI.GitHubActions.cs:45` and does not exist in 11.0.18 — and it would regenerate both
+  workflows *backwards* to older action versions than the ones checked in.
+- **`NuGet.Frameworks` 7.9.0.** Its documented exit condition is unmet: Fallout-build/Fallout#638 was
+  still open on 2026-09-09, and both 10.4.0 and 11.0.18 declare `NuGet.Packaging` 6.14.3.
+- **`global.json`'s `10.0.100`.** `rollForward: latestFeature` already picks up 10.0.401.
+
 The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
 `Fallout.Common` 10.4.0 as a transitive dependency — no new `PackageReference` anywhere, and
 nothing added to `src/` or `tests/`.
@@ -421,7 +507,8 @@ src/SonarQube.Mcp/          One production project (D1); AssemblyName sonarqube-
   Http/                     SonarApiClient, the handler chain (auth + retry), SonarRequestBuilder,
                             FormBody (D24), PagedResult, SonarApiException
   Http/Models/              Wire DTOs and SonarWireJsonContext (explicit [JsonPropertyName] on
-                            every property; never chained into the MCP JSON options)
+                            every property; never chained into the MCP JSON options), CeDtos.cs
+                            among them for the Compute Engine queue behind getAnalysisStatus
   Json/                     SonarDateTimeOffsetConverter — the one converter (+0000 timestamps)
   Tools/                    ProjectReadTools, IssueReadTools, MeasureReadTools, IssueWriteTools,
                             ToolDefaults, ToolErrors, ResultMapper, ComponentKeys,
@@ -531,8 +618,8 @@ or by scanning the source tree. Do not delete one to make a change pass:
 `SmokeTest` is the end-to-end check the unit tests cannot be: it publishes the Native AOT binary,
 spawns it, and drives a real `initialize` / `notifications/initialized` / `tools/list` exchange over
 stdio — **twice**. The first leg runs with a clean environment and asserts `serverInfo.name` and all
-nineteen tool names; the second sets `SONARQUBE_MCP_READ_ONLY=1` and asserts exactly the fifteen
-read names with none of the four writes. Both legs run with no token configured, which also proves
+twenty-three tool names; the second sets `SONARQUBE_MCP_READ_ONLY=1` and asserts exactly the
+eighteen read names with none of the five writes. Both legs run with no token configured, which also proves
 the handshake completes without credentials. CI runs `Test` and `SmokeTest` on every push and pull
 request.
 

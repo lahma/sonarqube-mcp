@@ -67,8 +67,11 @@ partial class Build : FalloutBuild,
         "listBranches",
         "listPullRequests",
         "getQualityGateStatus",
+        "getAnalysisStatus",
         "searchIssues",
+        "summarizeIssues",
         "getIssue",
+        "getIssueChangelog",
         "getRule",
         "searchHotspots",
         "getHotspot",
@@ -81,6 +84,7 @@ partial class Build : FalloutBuild,
         "assignIssue",
         "addIssueComment",
         "setHotspotStatus",
+        "bulkUpdateIssues",
     ];
 
     /// <summary>
@@ -94,6 +98,7 @@ partial class Build : FalloutBuild,
         "assignIssue",
         "addIssueComment",
         "setHotspotStatus",
+        "bulkUpdateIssues",
     ];
 
     /// <summary>How long SmokeTest waits for both JSON-RPC responses before giving up.</summary>

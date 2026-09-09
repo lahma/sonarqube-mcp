@@ -37,6 +37,12 @@ internal sealed class IssueReadTools
     /// <summary>What a single-issue read asks for: the transitions and comments a list cannot carry.</summary>
     private static readonly string[] DetailAdditionalFields = ["transitions", "comments", "rules", "users"];
 
+    /// <summary>
+    /// What a summary asks for: rule titles, so the <c>rules</c> grouping reports names rather than
+    /// bare keys. Without it the sidecar is simply absent.
+    /// </summary>
+    private static readonly string[] SummaryAdditionalFields = ["rules"];
+
     private IssueReadTools()
     {
     }
@@ -127,12 +133,14 @@ internal sealed class IssueReadTools
                     inNewCodePeriod,
                     sort,
                     ascending,
-                    SearchAdditionalFields,
-                    scope.Branch,
-                    scope.PullRequest,
-                    paging.Page,
-                    paging.PageSize,
-                    cancellationToken)
+                    additionalFields: SearchAdditionalFields,
+                    facets: null,
+                    facetMode: null,
+                    branch: scope.Branch,
+                    pullRequest: scope.PullRequest,
+                    page: paging.Page,
+                    pageSize: paging.PageSize,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             return ResultMapper.Issues(response, scope, paging.Page, paging.PageSize, options.BaseUrlText);
@@ -151,15 +159,18 @@ internal sealed class IssueReadTools
         "(the flow that explains how a data-flow rule reached its conclusion), and availableTransitions - the " +
         "transitions that are legal from this issue's current state. Call this before transitionIssue: " +
         "transitionIssue rejects a transition the issue cannot take, and this is the only way to know which " +
-        "ones it can.")]
+        "ones it can. An issue key belongs to one analysis scope, so pass the same projectKey and the same " +
+        "branch or pullRequest that the searchIssues call which produced the key was given.")]
     public static async Task<IssueDetail> GetIssueAsync(
         SonarApiClient client,
         SonarQubeMcpOptions options,
         [Description("The issue key, as searchIssues reports it (for example AZ_xePOumT_q4T_1FWf8).")]
         string issueKey,
-        [Description("The branch the issue is on, when it is not on the main branch. Mutually exclusive with pullRequest.")]
+        [Description("The Sonar project key the issue belongs to. Optional on the main branch and when SONARQUBE_MCP_DEFAULT_PROJECT is set; required whenever branch or pullRequest is given, because SonarQube only applies those to a key lookup when the project is named too.")]
+        string? projectKey = null,
+        [Description("The branch the issue is on, when it is not on the main branch. Mutually exclusive with pullRequest. Pass projectKey with it.")]
         string? branch = null,
-        [Description("The pull request the issue is on, as the SCM number in a string. Mutually exclusive with branch.")]
+        [Description("The pull request the issue is on, as the SCM number in a string. Mutually exclusive with branch. Pass projectKey with it.")]
         string? pullRequest = null,
         CancellationToken cancellationToken = default)
     {
@@ -168,15 +179,19 @@ internal sealed class IssueReadTools
 
         var key = ToolDefaults.RequireIssueKey(issueKey);
         var scope = ToolDefaults.ResolveScope(branch, pullRequest);
+        var project = ToolDefaults.ResolveScopedProject(projectKey, options, scope);
 
-        var context = new ToolCallContext("getIssue", options.DefaultProject, Component: null, EntityKey: "issue " + key);
+        var context = new ToolCallContext("getIssue", project, Component: null, EntityKey: "issue " + key);
 
         return await ToolErrors.ExecuteAsync(context, async () =>
         {
             // issues/search with an explicit key rather than a dedicated show endpoint: SonarQube
             // has none, and this is the only action that can be asked for transitions and comments.
+            // componentKeys is not redundant with the key filter: SonarQube only applies branch and
+            // pullRequest to a key lookup when the project is named alongside it, so omitting it
+            // makes every pull-request issue answer 200 with an empty list.
             var response = await client.SearchIssuesAsync(
-                    componentKeys: null,
+                    componentKeys: project is null ? null : [project],
                     issues: [key],
                     issueStatuses: null,
                     impactSeverities: null,
@@ -190,9 +205,11 @@ internal sealed class IssueReadTools
                     inNewCodePeriod: null,
                     sortBy: null,
                     ascending: null,
-                    DetailAdditionalFields,
-                    scope.Branch,
-                    scope.PullRequest,
+                    additionalFields: DetailAdditionalFields,
+                    facets: null,
+                    facetMode: null,
+                    branch: scope.Branch,
+                    pullRequest: scope.PullRequest,
                     page: null,
                     pageSize: 1,
                     cancellationToken)
@@ -202,9 +219,12 @@ internal sealed class IssueReadTools
             {
                 throw new McpException(
                     $"No issue with key '{key}' is visible to this server. An issue key belongs to one " +
-                    "analysis scope, so an issue raised on a branch or pull request is not found without " +
-                    "that branch or pullRequest argument; a closed issue is eventually purged. Find the " +
-                    "current key with searchIssues, scoped the same way.");
+                    "analysis scope, and the lookup only honours that scope when the project is named " +
+                    "with it: to read an issue raised on a branch or a pull request, pass projectKey " +
+                    "together with the same branch or pullRequest the searchIssues call used. A security " +
+                    "hotspot key looks identical to an issue key but is not one — read it with getHotspot. " +
+                    "Otherwise the issue has been closed and purged; searchIssues, scoped the same way, " +
+                    "reports the keys that are still live.");
             }
 
             return ResultMapper.Detail(
@@ -372,6 +392,157 @@ internal sealed class IssueReadTools
             var response = await client.ShowHotspotAsync(key, cancellationToken).ConfigureAwait(false);
 
             return ResultMapper.Hotspot(response, options.BaseUrlText);
+        }).ConfigureAwait(false);
+    }
+
+    [McpServerTool(
+        Name = "summarizeIssues",
+        Title = "Summarize issues",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = true,
+        UseStructuredContent = true)]
+    [Description(
+        "Counts a project's issues grouped by rule, file, directory, severity, quality, status, tag, " +
+        "language, assignee or author - in one call, without listing them. Use this before searchIssues " +
+        "whenever the question is where the problems are concentrated rather than what an individual one " +
+        "says: searchIssues can only reach the first 10000 results and would need dozens of pages to answer " +
+        "it. Defaults to grouping by impactSeverities, rules and files. Two things to know when reading the " +
+        "numbers. Each grouping is computed with its own filter removed, so if you filter by severity the " +
+        "severity counts describe the search without that filter and will not sum to matchingIssues - only " +
+        "matchingIssues reflects every filter. And a grouping stops at 100 values, which the result flags as " +
+        "truncated. Pass pullRequest to summarize only what a pull request introduced.")]
+    public static async Task<IssueSummaryResult> SummarizeIssuesAsync(
+        SonarApiClient client,
+        SonarQubeMcpOptions options,
+        [Description("The Sonar project key (for example myorg_myrepo) - the `id` parameter in a sonarcloud.io project URL, not the repository name. Optional when SONARQUBE_MCP_DEFAULT_PROJECT is set.")]
+        string? projectKey = null,
+        [Description("Narrow to one file or directory, as either a project-relative path (src/Widget.cs) or a full component key. Omit for the whole project.")]
+        string? component = null,
+        [Description("Analysed branch to summarize, spelled as listBranches reports it. Mutually exclusive with pullRequest.")]
+        string? branch = null,
+        [Description("Pull request to summarize, as the SCM number in a string (\"3266\"). Mutually exclusive with branch.")]
+        string? pullRequest = null,
+        [Description("What to group the counts by: rules, files, directories, tags, languages, assignees, authors, issueStatuses, impactSeverities, impactSoftwareQualities, cleanCodeAttributeCategories. Defaults to impactSeverities, rules and files.")]
+        string[]? groupBy = null,
+        [Description("Which statuses to count: OPEN, CONFIRMED, FALSE_POSITIVE, ACCEPTED, FIXED. Defaults to OPEN,CONFIRMED, which is the outstanding work.")]
+        string[]? issueStatuses = null,
+        [Description("Clean-code severities to count: INFO, LOW, MEDIUM, HIGH, BLOCKER. The old MINOR/MAJOR/CRITICAL names are not accepted.")]
+        string[]? impactSeverities = null,
+        [Description("Software qualities to count: MAINTAINABILITY, RELIABILITY, SECURITY. This replaces the old issue types.")]
+        string[]? impactSoftwareQualities = null,
+        [Description("Rule keys to count, spelled repository:rule (csharpsquid:S2259).")]
+        string[]? rules = null,
+        [Description("Issue tags to count, for example \"cwe\" or \"performance\".")]
+        string[]? tags = null,
+        [Description("Language keys to count, for example cs, java, js, py.")]
+        string[]? languages = null,
+        [Description("Assignee logins to count. __me__ means the account the configured token belongs to.")]
+        string[]? assignees = null,
+        [Description("Only issues created on or after this date: YYYY-MM-DD or a full ISO datetime. Mutually exclusive with createdInLast.")]
+        string? createdAfter = null,
+        [Description("Only issues created within this window ending now: a number followed by d, w, m or y (7d, 2w, 1m, 1y). Mutually exclusive with createdAfter.")]
+        string? createdInLast = null,
+        [Description("Only issues on code inside the project's new-code period. This is the same code a quality gate judges.")]
+        bool? inNewCodePeriod = null,
+        [Description("What the counts measure: issues (the default) or effort, which counts SonarQube's estimated remediation minutes instead.")]
+        string? countBy = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+
+        var project = ToolDefaults.ResolveProject(projectKey, options);
+        var componentKey = ToolDefaults.ResolveComponent(component, project);
+        var scope = ToolDefaults.ResolveScope(branch, pullRequest);
+        var groupings = ToolDefaults.ResolveIssueGroupings(groupBy);
+        var effortMode = ToolDefaults.ResolveIssueCountMode(countBy);
+        var statuses = ToolDefaults.ResolveIssueStatuses(issueStatuses);
+        var severities = ToolDefaults.ResolveImpactSeverities(impactSeverities);
+        var qualities = ToolDefaults.ResolveImpactSoftwareQualities(impactSoftwareQualities);
+        var created = ToolDefaults.ResolveCreatedFilter(createdAfter, createdInLast);
+
+        var wireFacets = groupings.Select(ToolDefaults.FacetWireName).ToArray();
+
+        var context = new ToolCallContext("summarizeIssues", project, componentKey);
+
+        return await ToolErrors.ExecuteAsync(context, async () =>
+        {
+            // ps=1 because the issues themselves are not wanted; the facets are whole-result
+            // aggregates and do not page. additionalFields=rules is what lets a rule key be
+            // reported with its title rather than as a bare identifier.
+            var response = await client.SearchIssuesAsync(
+                    componentKeys: [componentKey],
+                    issues: null,
+                    issueStatuses: statuses,
+                    impactSeverities: severities,
+                    impactSoftwareQualities: qualities,
+                    rules: ToolDefaults.CleanList(rules),
+                    tags: ToolDefaults.CleanList(tags),
+                    languages: ToolDefaults.CleanList(languages),
+                    assignees: ToolDefaults.CleanList(assignees),
+                    createdAfter: created.CreatedAfter,
+                    createdInLast: created.CreatedInLast,
+                    inNewCodePeriod: inNewCodePeriod,
+                    sortBy: null,
+                    ascending: null,
+                    additionalFields: SummaryAdditionalFields,
+                    facets: wireFacets,
+                    facetMode: effortMode ? "effort" : null,
+                    branch: scope.Branch,
+                    pullRequest: scope.PullRequest,
+                    page: null,
+                    pageSize: 1,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            return ResultMapper.IssueSummary(response, groupings, scope, project, effortMode, options.BaseUrlText);
+        }).ConfigureAwait(false);
+    }
+
+    [McpServerTool(
+        Name = "getIssueChangelog",
+        Title = "Get issue changelog",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = true,
+        UseStructuredContent = true)]
+    [Description(
+        "Reads one issue's history: every status, resolution, assignee and severity change, with who made it " +
+        "and when. Call it before transitioning an issue that is not OPEN - an issue somebody already accepted " +
+        "and a reviewer reopened is a decision to read, not to repeat. Unlike getIssue this takes the key " +
+        "alone: it is not scoped, so no projectKey, branch or pullRequest is needed. An empty history from a " +
+        "server with no token configured means the history could not be read, not that nothing happened; the " +
+        "result says which.")]
+    public static async Task<IssueChangelogResult> GetIssueChangelogAsync(
+        SonarApiClient client,
+        SonarQubeMcpOptions options,
+        [Description("The issue key, as searchIssues reports it (for example AZ_xePOumT_q4T_1FWf8).")]
+        string issueKey,
+        [Description("The Sonar project key the issue belongs to. Optional, and used only to compose the issue's web link.")]
+        string? projectKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var key = ToolDefaults.RequireIssueKey(issueKey);
+        var project = string.IsNullOrWhiteSpace(projectKey) ? options.DefaultProject : projectKey.Trim();
+
+        var context = new ToolCallContext(
+            "getIssueChangelog", project, Component: null, EntityKey: "issue " + key);
+
+        return await ToolErrors.ExecuteAsync(context, async () =>
+        {
+            var response = await client
+                .GetIssueChangelogAsync(key, cancellationToken)
+                .ConfigureAwait(false);
+
+            return ResultMapper.Changelog(
+                response,
+                key,
+                project,
+                !string.IsNullOrEmpty(options.Token),
+                options.BaseUrlText);
         }).ConfigureAwait(false);
     }
 }
