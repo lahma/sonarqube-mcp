@@ -366,4 +366,74 @@ public class ConfigurationTests
 
         return SonarQubeMcpOptions.FromEnvironment(name => map.TryGetValue(name, out var value) ? value : null);
     }
+
+    // ---------------------------------------------------------------------------------------
+    // The plugin-option layer (issue #1)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The regression for issue #1. A Claude Code plugin substitutes an option the user never filled
+    /// in as the <b>empty string</b> rather than omitting it, so an option mapped straight onto
+    /// <c>SONARQUBE_TOKEN</c> sets that variable to <c>""</c> in the child process and shadows a
+    /// value the user already had. Blank from the plugin layer therefore means <em>absent</em>, and
+    /// the plain variable still wins the day.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AnEmptyPluginOptionDoesNotShadowTheAmbientVariable(string pluginValue)
+    {
+        var options = SonarQubeMcpOptions.FromEnvironment(name => name switch
+        {
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN" => pluginValue,
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_ORG" => pluginValue,
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_MCP_DEFAULT_PROJECT" => pluginValue,
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_URL" => pluginValue,
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_MCP_READ_ONLY" => pluginValue,
+            "SONARQUBE_TOKEN" => "ambient-token",
+            "SONARQUBE_ORG" => "ambient-org",
+            "SONARQUBE_MCP_DEFAULT_PROJECT" => "ambient_project",
+            "SONARQUBE_URL" => "https://sonarqube.us/",
+            "SONARQUBE_MCP_READ_ONLY" => "1",
+            _ => null,
+        });
+
+        Assert.Equal("ambient-token", options.Token);
+        Assert.Equal("SONARQUBE_TOKEN", options.TokenVariable);
+        Assert.Equal("ambient-org", options.Organization);
+        Assert.Equal("ambient_project", options.DefaultProject);
+        Assert.Equal("https://sonarqube.us", options.BaseUrlText);
+        Assert.True(options.ReadOnly);
+    }
+
+    /// <summary>A filled-in option is the point of the prompt, so it wins over the environment.</summary>
+    [Fact]
+    public void AConfiguredPluginOptionWinsOverTheAmbientVariable()
+    {
+        var options = SonarQubeMcpOptions.FromEnvironment(name => name switch
+        {
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN" => "plugin-token",
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_ORG" => "plugin-org",
+            "CLAUDE_PLUGIN_OPTION_SONARQUBE_MCP_READ_ONLY" => "1",
+            "SONARQUBE_TOKEN" => "ambient-token",
+            "SONARQUBE_ORG" => "ambient-org",
+            "SONARQUBE_MCP_READ_ONLY" => "0",
+            _ => null,
+        });
+
+        Assert.Equal("plugin-token", options.Token);
+        Assert.Equal("CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN", options.TokenVariable);
+        Assert.Equal("plugin-org", options.Organization);
+        Assert.True(options.ReadOnly);
+    }
+
+    /// <summary>With neither set there is no token and nothing to attribute it to.</summary>
+    [Fact]
+    public void WithNeitherVariableSetThereIsNoTokenAndNoSource()
+    {
+        var options = SonarQubeMcpOptions.FromEnvironment(static _ => null);
+
+        Assert.Null(options.Token);
+        Assert.Null(options.TokenVariable);
+    }
 }

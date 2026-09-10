@@ -76,7 +76,7 @@ named `sonarqube-mcp-{version}-{rid}` and contains the executable, `LICENSE` and
 | macOS Apple silicon | `osx-arm64` | `sonarqube-mcp-{version}-osx-arm64.tar.gz` |
 
 ```bash
-tar -xzf sonarqube-mcp-1.1.0-linux-x64.tar.gz
+tar -xzf sonarqube-mcp-1.1.1-linux-x64.tar.gz
 chmod +x sonarqube-mcp
 ./sonarqube-mcp --version
 ```
@@ -102,7 +102,7 @@ downloads and runs it in one step, so there is nothing to install and nothing to
 hand:
 
 ```bash
-dnx mcp-sonarqube@1.1.0 --yes status
+dnx mcp-sonarqube@1.1.1 --yes status
 ```
 
 `--yes` accepts the download prompt and is consumed by `dnx` itself; everything after it is passed
@@ -115,7 +115,7 @@ speaks MCP over stdio, which is how a client should launch it:
     "sonarqube": {
       "type": "stdio",
       "command": "dnx",
-      "args": ["mcp-sonarqube@1.1.0", "--yes"],
+      "args": ["mcp-sonarqube@1.1.1", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "...",
         "SONARQUBE_ORG": "my-org"
@@ -125,7 +125,7 @@ speaks MCP over stdio, which is how a client should launch it:
 }
 ```
 
-Pin the version (`@1.1.0`) rather than floating: an MCP server is something an agent runs on your
+Pin the version (`@1.1.1`) rather than floating: an MCP server is something an agent runs on your
 behalf, and a pinned version is one you decided to run. This half is framework-dependent, so it
 needs the .NET 10 SDK — if a client reports *the command "dnx" was not found*, that is what is
 missing.
@@ -277,6 +277,13 @@ the authority when this table and the binary disagree.
 | `SONARQUBE_URL` | `https://sonarcloud.io` | Base URL. Only `sonarcloud.io` and `sonarqube.us` over `https` are accepted; anything else is ignored with a warning on stderr. |
 | `SONARQUBE_MCP_DEFAULT_PROJECT` | — | Default for the `projectKey` tool argument. The `id` in a project URL, not the repository name. |
 | `SONARQUBE_MCP_READ_ONLY` | `0` | `1` registers only the eighteen read tools; the five write tools are absent from `tools/list`. Accepts `1/true/yes/on` and `0/false/no/off`. |
+
+Installed as a Claude Code plugin, the five variables above that the plugin prompts for arrive as
+`CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN` and friends. Those are read **first** and a blank one counts
+as unset, so leaving a prompt empty falls through to whatever your own environment already says
+rather than blanking it — which is what an earlier version did, with the failure surfacing as
+`404 Project doesn't exist` on a project key that was correct. You never set these by hand;
+`sonarqube-mcp status` reports which variable the token actually came from.
 | `SONARQUBE_MCP_LOG_LEVEL` | `Information` | Minimum level for the stderr logger: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. |
 | `SONARQUBE_MCP_MAX_PAGE_SIZE` | `100` | Ceiling on a tool's `pageSize`, 1–500. 500 is the API's own hard limit. |
 | `SONARQUBE_MCP_DEFAULT_PAGE_SIZE` | `50` | The `pageSize` a tool uses when the call omits it. Clamped to the ceiling above. |
@@ -359,7 +366,7 @@ Two more passes worth knowing, both described in full in the shipped skill:
 
 ```
 $ sonarqube-mcp status
-sonarqube-mcp 1.1.0
+sonarqube-mcp 1.1.1
 
 Configuration
   Base URL:          https://sonarcloud.io

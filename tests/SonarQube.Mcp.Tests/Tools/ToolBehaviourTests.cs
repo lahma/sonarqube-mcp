@@ -2776,6 +2776,82 @@ public class ToolBehaviourTests
         Assert.Equal(["unassign"], result.Applied);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Anonymity is diagnosed where it bites (issue #1)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// An empty project list from a tokenless server looks exactly like confirmation that a project
+    /// key was wrong. It is not — it is the same anonymity that made the key look wrong.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyProjectListFromATokenlessServerSaysItCouldOnlySeePublicProjects()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson("""{"paging":{"pageIndex":1,"pageSize":50,"total":0},"components":[]}""");
+        using var client = ToolTestHost.CreateAnonymousClient(handler);
+
+        var result = await ProjectReadTools.ListProjectsAsync(
+            client,
+            ToolTestHost.CreateOptions(token: null),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Projects);
+        Assert.Contains("SONARQUBE_TOKEN", result.Note, StringComparison.Ordinal);
+        Assert.Contains("not evidence", result.Note, StringComparison.Ordinal);
+    }
+
+    /// <summary>With a token, an empty list means what it says and carries no such excuse.</summary>
+    [Fact]
+    public async Task AnEmptyProjectListFromAnAuthenticatedServerCarriesNoAnonymityNote()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson("""{"paging":{"pageIndex":1,"pageSize":50,"total":0},"components":[]}""");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.ListProjectsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Projects);
+        Assert.Null(result.Note);
+    }
+
+    /// <summary>
+    /// SonarQube reports a private project to an anonymous caller as "Project doesn't exist", which
+    /// reads as a wrong key. The 404 has to name the missing credential or the reader goes hunting
+    /// for a key that was right all along.
+    /// </summary>
+    [Fact]
+    public async Task A404FromATokenlessServerNamesTheMissingTokenAsAPossibleCause()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(
+            """{"errors":[{"msg":"Component key 'x' not found"}]}""",
+            HttpStatusCode.NotFound);
+
+        using var client = ToolTestHost.CreateAnonymousClient(handler);
+
+        ToolErrors.UseOptions(ToolTestHost.CreateOptions(token: null));
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<McpException>(() =>
+                ProjectReadTools.ListBranchesAsync(
+                    client,
+                    ToolTestHost.CreateOptions(token: null),
+                    cancellationToken: TestContext.Current.CancellationToken));
+
+            Assert.Contains("no SONARQUBE_TOKEN is configured", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("indistinguishable", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ToolErrors.UseOptions(ToolTestHost.CreateOptions());
+        }
+    }
+
     private static StubHttpMessageHandler Stub(string fixture)
     {
         var handler = new StubHttpMessageHandler();

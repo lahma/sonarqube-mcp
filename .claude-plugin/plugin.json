@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "sonarqube-mcp",
   "displayName": "SonarQube Cloud code quality",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "The sonarqube-mcp server plus the code-quality workflow skill: quality gates, issue triage, security hotspots, measures and per-line coverage from SonarQube Cloud.",
   "author": {
     "name": "lahma",
@@ -16,13 +16,13 @@
   "mcpServers": {
     "sonarqube": {
       "command": "dnx",
-      "args": ["mcp-sonarqube@1.1.0", "--yes"],
+      "args": ["mcp-sonarqube@1.1.1", "--yes"],
       "env": {
-        "SONARQUBE_TOKEN": "${user_config.sonarqube_token}",
-        "SONARQUBE_ORG": "${user_config.sonarqube_org}",
-        "SONARQUBE_URL": "${user_config.sonarqube_url}",
-        "SONARQUBE_MCP_DEFAULT_PROJECT": "${user_config.sonarqube_default_project}",
-        "SONARQUBE_MCP_READ_ONLY": "${user_config.sonarqube_read_only}"
+        "CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN": "${user_config.sonarqube_token}",
+        "CLAUDE_PLUGIN_OPTION_SONARQUBE_ORG": "${user_config.sonarqube_org}",
+        "CLAUDE_PLUGIN_OPTION_SONARQUBE_URL": "${user_config.sonarqube_url}",
+        "CLAUDE_PLUGIN_OPTION_SONARQUBE_MCP_DEFAULT_PROJECT": "${user_config.sonarqube_default_project}",
+        "CLAUDE_PLUGIN_OPTION_SONARQUBE_MCP_READ_ONLY": "${user_config.sonarqube_read_only}"
       }
     }
   },
@@ -30,20 +30,20 @@
     "sonarqube_token": {
       "type": "string",
       "title": "SonarQube Cloud user token",
-      "description": "Created at https://sonarcloud.io/account/security — pick the User Token type, not a project analysis token. Leave it blank to read public projects anonymously.",
+      "description": "Created at https://sonarcloud.io/account/security — pick the User Token type, not a project analysis token. Leave it blank to use a SONARQUBE_TOKEN already set in your environment, or to read public projects anonymously if there is none.",
       "sensitive": true,
       "default": ""
     },
     "sonarqube_org": {
       "type": "string",
       "title": "Organization key",
-      "description": "The last segment of https://sonarcloud.io/organizations/{key}. Needed to list projects and to read rule explanations; everything else works without it.",
+      "description": "The last segment of https://sonarcloud.io/organizations/{key}. Needed to list projects and to read rule explanations; everything else works without it. Blank falls through to SONARQUBE_ORG in your environment.",
       "default": ""
     },
     "sonarqube_default_project": {
       "type": "string",
       "title": "Default project key",
-      "description": "The id in a sonarcloud.io project URL, not the repository name. Set it and the projectKey argument becomes optional on every tool.",
+      "description": "The id in a sonarcloud.io project URL, not the repository name. Set it and the projectKey argument becomes optional on every tool. Blank falls through to SONARQUBE_MCP_DEFAULT_PROJECT in your environment.",
       "default": ""
     },
     "sonarqube_read_only": {
@@ -55,7 +55,7 @@
     "sonarqube_url": {
       "type": "string",
       "title": "Base URL",
-      "description": "Only wanted on sonarqube.us. Blank means https://sonarcloud.io; SonarQube Server is out of scope.",
+      "description": "Only wanted on sonarqube.us. Blank falls through to SONARQUBE_URL in your environment and then to https://sonarcloud.io; SonarQube Server is out of scope.",
       "default": ""
     }
   }

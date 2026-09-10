@@ -1,3 +1,24 @@
+# 1.1.1
+
+- **Fixed: the Claude Code plugin blanked a token the user already had.** The manifest mapped every
+  credential onto its own environment variable through a `${user_config.X}` placeholder, and an
+  option the user never filled in substitutes as the **empty string** rather than being omitted - so
+  installing the plugin set `SONARQUBE_TOKEN=""` in the server's environment and shadowed a
+  perfectly good ambient value. The server then ran anonymously, and because SonarQube reports a
+  private project to an anonymous caller as `404 Project doesn't exist`, the failure read as a wrong
+  project key; `listProjects` came back empty for the same reason and appeared to confirm it. There
+  was no workaround: a value in `pluginConfigs.<plugin>.options` is treated literally, so the only
+  way to run the plugin was to copy the token in plaintext into `settings.json`. The manifest now
+  writes to `CLAUDE_PLUGIN_OPTION_*` names, which the server reads **first** and treats as absent
+  when blank, falling through to the plain variable - so a filled-in option still wins and an empty
+  one no longer destroys anything. Reported as issue #1.
+- A `404` and an empty `listProjects` now say when the request went out without a credential, rather
+  than leaving "wrong key" as the only hypothesis on offer.
+- `sonarqube-mcp status` reports **which** variable supplied the token (`set, from SONARQUBE_TOKEN`
+  or `set, from CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN`) instead of a bare `set`. Two sources can
+  supply it, and which one won is the difference between "my token is being ignored" and "my token
+  is wrong". No part of the value is ever printed.
+
 # 1.1.0
 
 - **Fixed: `getIssue` could not read a pull request's or a branch's issue at all.** SonarQube Cloud

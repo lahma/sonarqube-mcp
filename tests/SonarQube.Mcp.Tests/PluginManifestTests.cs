@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using SonarQube.Mcp.Configuration;
+
 using Xunit;
 
 namespace SonarQube.Mcp.Tests;
@@ -184,13 +186,28 @@ public class PluginManifestTests
             .EnumerateObject()
             .ToDictionary(entry => entry.Name, entry => entry.Value.GetString()!, StringComparer.Ordinal);
 
+        // The manifest writes to the plugin-option names, never to the plain ones. That is the fix
+        // for issue #1 and it is the whole reason this indirection exists: an option the user never
+        // filled in substitutes as the empty string rather than being omitted, so mapping it onto
+        // SONARQUBE_TOKEN would set that variable to "" in the child process and shadow a value the
+        // user already had in their environment. The server reads the prefixed name first and falls
+        // back to the plain one, so blank means "not configured" instead of "configured as empty".
         Assert.Equal(
-            documented.Keys.OrderBy(name => name, StringComparer.Ordinal),
+            documented.Keys.Select(name => SonarQubeMcpOptions.PluginOptionPrefix + name).OrderBy(name => name, StringComparer.Ordinal),
             passed.Keys.OrderBy(name => name, StringComparer.Ordinal));
+
+        foreach (var name in documented.Keys)
+        {
+            Assert.False(
+                passed.ContainsKey(name),
+                $"The manifest maps {name} directly. An unset option substitutes as the empty string, "
+                + $"which would shadow a {name} the user already has in their environment (issue #1). "
+                + $"Map it to {SonarQubeMcpOptions.PluginOptionPrefix}{name} instead.");
+        }
 
         foreach (var (name, isSecret) in documented)
         {
-            var placeholder = passed[name];
+            var placeholder = passed[SonarQubeMcpOptions.PluginOptionPrefix + name];
 
             Assert.True(
                 placeholder.StartsWith("${user_config.", StringComparison.Ordinal)

@@ -74,7 +74,12 @@ internal sealed class ProjectReadTools
                 .SearchComponentsAsync(organization, query, paging.Page, paging.PageSize, cancellationToken)
                 .ConfigureAwait(false);
 
-            return ResultMapper.Projects(response, paging.Page, paging.PageSize, options.BaseUrlText);
+            return ResultMapper.Projects(
+                response,
+                paging.Page,
+                paging.PageSize,
+                options.BaseUrlText,
+                authenticated: options.Token is not null);
         }).ConfigureAwait(false);
     }
 

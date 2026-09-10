@@ -250,6 +250,31 @@ internal static class ToolErrors
         return message.ToString();
     }
 
+    /// <summary>
+    /// Says that the request went out without a credential, when it did.
+    /// </summary>
+    /// <remarks>
+    /// This is the difference between a 404 that means "wrong key" and one that means "you cannot
+    /// see it". SonarQube reports a private project to an anonymous caller as
+    /// <c>Project doesn't exist</c>, which sends a reader to <c>listProjects</c> — where the answer
+    /// is an empty list, for the same reason, confirming the wrong hypothesis. Naming the missing
+    /// token at the point of failure is the only thing that breaks that loop.
+    /// </remarks>
+    /// <param name="message">The message being composed.</param>
+    private static void AppendAnonymousWarning(StringBuilder message)
+    {
+        if (_options.Token is not null)
+        {
+            return;
+        }
+
+        message
+            .Append("\nNote that no SONARQUBE_TOKEN is configured, so this request went out anonymously and ")
+            .Append("could only see public projects — a private project is indistinguishable from a missing ")
+            .Append("one in that state, and listProjects will be empty for the same reason rather than as ")
+            .Append("confirmation. `sonarqube-mcp status` reports what the server is actually reading.");
+    }
+
     private static string NotFound(string? detail, ToolCallContext context)
     {
         if (string.Equals(context.Tool, SourcesTool, StringComparison.Ordinal))
@@ -276,6 +301,8 @@ internal static class ToolErrors
             .Append(". The project key is the `id` in a sonarcloud.io project URL, not the repository name — ")
             .Append("confirm it with listProjects. A branch or pull request that has never been analysed is ")
             .Append("also a 404; listBranches and listPullRequests say which ones exist.");
+
+        AppendAnonymousWarning(message);
 
         return message.ToString();
     }

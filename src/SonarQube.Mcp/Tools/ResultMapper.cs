@@ -43,7 +43,8 @@ internal static class ResultMapper
         ComponentsSearchResponseDto response,
         int requestedPage,
         int requestedPageSize,
-        string baseUrl)
+        string baseUrl,
+        bool authenticated = true)
     {
         ArgumentNullException.ThrowIfNull(response);
 
@@ -68,7 +69,16 @@ internal static class ResultMapper
             PageSize = page.PageSize,
             TotalCount = page.Total,
             HasMore = HasMore(page),
-            Note = CapNote(page.Total),
+
+            // An empty list from a tokenless server is the single most misleading answer this
+            // server can give: it looks like confirmation that a project key was wrong, when it is
+            // the same anonymity that made the key look wrong in the first place.
+            Note = projects.Count == 0 && !authenticated
+                ? "No projects, but this server has no SONARQUBE_TOKEN configured, so it can only see " +
+                  "public ones - an empty list here is not evidence that a project key is wrong. Set " +
+                  "SONARQUBE_TOKEN in the environment the MCP client launches this server with and " +
+                  "restart it; `sonarqube-mcp status` reports what it currently reads."
+                : CapNote(page.Total),
         };
     }
 

@@ -44,7 +44,7 @@ to audit — treat that as a hard constraint, not a preference.
 6. LF line endings everywhere (`.gitattributes` enforces it). `TreatWarningsAsErrors` is on —
    the compiler and analyzers are the lint step.
 
-## Design decisions (D1–D30)
+## Design decisions (D1–D31)
 
 | # | Decision |
 |---|---|
@@ -79,6 +79,8 @@ to audit — treat that as a hard constraint, not a preference.
 | D28 | **Aggregation is its own tool, not a parameter.** `summarizeIssues` exists rather than a `facets` argument on `searchIssues` for two reasons: `searchIssues` already carries eighteen parameters and every one of them is read on every call, and the two tools answer different questions — one returns issues and pages, the other returns whole-result counts and cannot page. Keeping them apart is also what lets `ToolSchemaTests` assert that `summarizeIssues` carries **none** of the paging envelope, which would otherwise invite a second request that returns identical counts. Its `matchingIssues` is deliberately not called `totalCount`: that name is the envelope's. |
 | D29 | **`bulkUpdateIssues` exposes transition, assignment and comment, and nothing else.** `issues/bulk_change` also offers `set_severity` and `set_type`, which speak the legacy vocabulary D22 rejects at the tool boundary, and `add_tags`/`remove_tags`, which have no single-issue counterpart in this server — exposing tag writing only in the bulk tool would leave the surface asymmetric, and a model would reach for it to do things one issue at a time. The response is four counts naming no issue, so `ignored` and `failed` are reported as counts with a pointer to `getIssue` rather than attributed to keys this server cannot identify. |
 | D30 | **`getAnalysisStatus` reports, and never waits.** It is one call that returns the queue and the last finished task; it does not poll, sleep or retry until an analysis completes. A tool that blocked for the length of a Compute Engine run would hold the client's request open for minutes with no progress channel and no way to cancel meaningfully, and the client is in a far better position to decide how long to wait and what to do meanwhile. It is annotated `ReadOnly`/`Idempotent` — which is a claim about *effects*, not about a stable answer; that its answer changes between calls is the entire point, and the description says so. `ce/activity` (401 anonymously, project-admin with a token) and `ce/activity_status` (403) are out of the budget. |
+
+| D31 | **The plugin writes to `CLAUDE_PLUGIN_OPTION_*`, never to the plain variable names.** A Claude Code plugin manifest substitutes `${user_config.KEY}` with the option's value, and an option the user never filled in resolves to the **empty string** rather than being omitted — so mapping one onto `SONARQUBE_TOKEN` sets that variable to `""` in the child process and *shadows* whatever the user's environment already said. `SonarQubeMcpOptions` therefore reads `CLAUDE_PLUGIN_OPTION_<NAME>` first, treating blank as absent, and falls back to `<NAME>`: a filled-in option wins, a blank one changes nothing. Do not "simplify" the manifest back to the plain names — `PluginManifestTests` fails if you do, and the runtime symptom is a `404 Project doesn't exist` on a project key that was correct (issue #1). The prefix is Claude Code's own convention for the same values, so nothing new is invented. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -329,6 +331,11 @@ from the fixture manifest.
 
 **Errors and transport**
 
+- **A private project is a 404, not a 403, to an anonymous caller**, and `components/search`
+  answers such a caller with an empty list rather than an error. The two failures corroborate each
+  other into the wrong conclusion — "the project key is wrong" — which is why `ToolErrors.NotFound`
+  and `ResultMapper.Projects` both name a missing token when there is none. Neither is cosmetic: it
+  is the only signal that separates "cannot see it" from "does not exist".
 - **C3 — a 401 from a bad token has an empty body** (`Content-Length: 0`), while a 401 from no
   token at all carries the `{"errors":[{"msg":…}]}` envelope. Never dereference the envelope
   unconditionally; the error composer must produce a useful message from nothing.

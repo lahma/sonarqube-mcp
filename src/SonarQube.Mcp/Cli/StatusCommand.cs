@@ -36,6 +36,19 @@ namespace SonarQube.Mcp.Cli;
 internal static class StatusCommand
 {
     /// <summary>Runs against the real environment and the real API.</summary>
+    /// <summary>
+    /// Says whether a token is configured and <b>which variable supplied it</b> — never any part of
+    /// the value itself.
+    /// </summary>
+    /// <remarks>
+    /// The variable name matters because two of them can supply it. A Claude Code plugin writes its
+    /// prompt answers to <c>CLAUDE_PLUGIN_OPTION_*</c>, and those win over the plain names; seeing
+    /// which one won is the difference between "my token is being ignored" and "my token is wrong".
+    /// </remarks>
+    /// <param name="options">The configuration being reported.</param>
+    private static string DescribeToken(SonarQubeMcpOptions options) =>
+        options.TokenVariable is { } variable ? "set, from " + variable : "not set";
+
     internal static Task<int> RunAsync(SonarQubeMcpOptions options, CancellationToken cancellationToken = default) =>
         RunAsync(options, Console.Out, client: null, cancellationToken);
 
@@ -63,10 +76,10 @@ internal static class StatusCommand
         output.WriteLine();
         output.WriteLine("Configuration");
         output.WriteLine($"  Base URL:          {options.BaseUrlText}");
-        output.WriteLine($"  SONARQUBE_TOKEN:   {(options.Token is null ? "not set" : "set")}");
+        output.WriteLine($"  Token:             {DescribeToken(options)}");
         output.WriteLine($"  Organization:      {CliRuntime.Describe(options.Organization)}");
         output.WriteLine($"  Default project:   {CliRuntime.Describe(options.DefaultProject)}");
-        output.WriteLine($"  Read-only mode:    {(options.ReadOnly ? "on - the four write tools are not registered" : "off")}");
+        output.WriteLine($"  Read-only mode:    {(options.ReadOnly ? "on - the five write tools are not registered" : "off")}");
 
         if (options.RejectedBaseUrl is { } rejected)
         {

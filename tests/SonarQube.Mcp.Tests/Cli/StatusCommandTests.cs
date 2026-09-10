@@ -54,7 +54,7 @@ public class StatusCommandTests
         var output = writer.ToString();
 
         Assert.Contains("No SONARQUBE_TOKEN set", output, StringComparison.Ordinal);
-        Assert.Contains("SONARQUBE_TOKEN:   not set", output, StringComparison.Ordinal);
+        Assert.Contains("Token:             not set", output, StringComparison.Ordinal);
         Assert.Contains("https://sonarcloud.io/account/security", output, StringComparison.Ordinal);
     }
 
@@ -81,7 +81,7 @@ public class StatusCommandTests
 
         var output = writer.ToString();
 
-        Assert.Contains("SONARQUBE_TOKEN:   set", output, StringComparison.Ordinal);
+        Assert.Contains("Token:             set, from SONARQUBE_TOKEN", output, StringComparison.Ordinal);
         Assert.Contains("Token check:       accepted by https://sonarcloud.io", output, StringComparison.Ordinal);
 
         // No organization configured, so the second probe is skipped and the reason is printed.
@@ -271,7 +271,7 @@ public class StatusCommandTests
         Assert.Contains("Base URL:          https://sonarcloud.io", output, StringComparison.Ordinal);
         Assert.Contains("Organization:      (not set)", output, StringComparison.Ordinal);
         Assert.Contains("Default project:   (not set)", output, StringComparison.Ordinal);
-        Assert.Contains("Read-only mode:    on - the four write tools are not registered", output, StringComparison.Ordinal);
+        Assert.Contains("Read-only mode:    on - the five write tools are not registered", output, StringComparison.Ordinal);
         Assert.Contains(ServerVersion.Name, output, StringComparison.Ordinal);
         Assert.Contains(ServerVersion.Value, output, StringComparison.Ordinal);
     }

@@ -53,6 +53,29 @@ internal sealed record SonarQubeMcpOptions
     internal const int DefaultHttpTimeoutSeconds = 100;
 
     /// <summary>
+    /// The prefix the Claude Code plugin launcher's values arrive under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A plugin manifest maps each declared option into the server's environment through a
+    /// <c>${user_config.KEY}</c> placeholder, and an option the user never filled in substitutes as
+    /// the <b>empty string</b> rather than being omitted. Mapping such an option straight onto
+    /// <c>SONARQUBE_TOKEN</c> therefore sets that variable to <c>""</c> in the child process, which
+    /// <em>shadows</em> a perfectly good value the user already had in their environment — and the
+    /// server then runs anonymously, which against a private project is reported by SonarQube as
+    /// <c>404 Project doesn't exist</c> rather than as an authentication problem.
+    /// </para>
+    /// <para>
+    /// So the manifest writes to <c>CLAUDE_PLUGIN_OPTION_*</c> instead, and these are read
+    /// <b>first, in preference to</b> the plain names, with blank treated as absent. A user who
+    /// fills the option in gets their value; a user who leaves it blank falls through to whatever
+    /// their environment already said. Nobody sets these by hand — they are the plugin launcher's
+    /// half of the contract, and the prefix is Claude Code's own convention for the same values.
+    /// </para>
+    /// </remarks>
+    internal const string PluginOptionPrefix = "CLAUDE_PLUGIN_OPTION_";
+
+    /// <summary>
     /// The only hosts <c>SONARQUBE_URL</c> may name. SonarQube Cloud runs on exactly these; a URL
     /// anywhere else is either a SonarQube Server instance (out of scope — the API surface differs)
     /// or an attempt to point a configured token at a host that is not SonarSource's.
@@ -73,6 +96,12 @@ internal sealed record SonarQubeMcpOptions
     /// naming this variable.
     /// </summary>
     internal string? Token { get; init; }
+
+    /// <summary>
+    /// The environment variable <see cref="Token"/> came from, or <see langword="null"/> when there
+    /// is no token. Reported by <c>status</c>; nothing else reads it.
+    /// </summary>
+    internal string? TokenVariable { get; init; }
 
     /// <summary>
     /// <c>SONARQUBE_ORG</c> — the organization key, the <c>/organizations/{key}</c> segment of a
@@ -148,17 +177,19 @@ internal sealed record SonarQubeMcpOptions
         var maxPageSize = ReadInt32(read, "SONARQUBE_MCP_MAX_PAGE_SIZE", DefaultMaxPageSize, 1, PageSizeLimit);
         var defaultPageSize = ReadInt32(read, "SONARQUBE_MCP_DEFAULT_PAGE_SIZE", DefaultDefaultPageSize, 1, PageSizeLimit);
 
-        var rawBaseUrl = ReadString(read, "SONARQUBE_URL");
+        var rawBaseUrl = ReadConfigured(read, "SONARQUBE_URL");
+        var token = ReadConfiguredWithSource(read, "SONARQUBE_TOKEN");
         var baseUrl = TryParseBaseUrl(rawBaseUrl);
 
         return new SonarQubeMcpOptions
         {
-            Token = ReadString(read, "SONARQUBE_TOKEN"),
-            Organization = ReadString(read, "SONARQUBE_ORG"),
+            Token = token.Value,
+            TokenVariable = token.Source,
+            Organization = ReadConfigured(read, "SONARQUBE_ORG"),
             BaseUrl = baseUrl ?? DefaultBaseUrl,
             RejectedBaseUrl = baseUrl is null ? rawBaseUrl : null,
-            DefaultProject = ReadString(read, "SONARQUBE_MCP_DEFAULT_PROJECT"),
-            ReadOnly = ReadBoolean(read, "SONARQUBE_MCP_READ_ONLY", defaultValue: false),
+            DefaultProject = ReadConfigured(read, "SONARQUBE_MCP_DEFAULT_PROJECT"),
+            ReadOnly = ReadBoolean(Layered(read), "SONARQUBE_MCP_READ_ONLY", defaultValue: false),
             LogLevel = ReadLogLevel(read, "SONARQUBE_MCP_LOG_LEVEL", DefaultLogLevel),
             MaxPageSize = maxPageSize,
 
@@ -233,6 +264,51 @@ internal sealed record SonarQubeMcpOptions
     }
 
     /// <summary>Trims and normalises an unset or all-whitespace variable to <see langword="null"/>.</summary>
+    /// <summary>
+    /// Reads a variable the Claude Code plugin manifest also writes, preferring the plugin's value
+    /// and falling back to the plain name when the plugin left it blank.
+    /// </summary>
+    /// <remarks>
+    /// Blank means <em>absent</em> here, not "configured as empty" — see
+    /// <see cref="PluginOptionPrefix"/> for why that distinction is the whole point.
+    /// </remarks>
+    /// <param name="read">The environment reader.</param>
+    /// <param name="name">The plain variable name, which is also the option's suffix.</param>
+    private static string? ReadConfigured(Func<string, string?> read, string name) =>
+        ReadConfiguredWithSource(read, name).Value;
+
+    /// <summary>
+    /// The same read, reporting <em>which</em> variable supplied the value.
+    /// </summary>
+    /// <remarks>
+    /// Only the token needs this, and it needs it because the failure this whole layer exists to
+    /// prevent is invisible: <c>sonarqube-mcp status</c> saying "set" without saying where from is
+    /// exactly the report that made the original clobber take an afternoon to find.
+    /// </remarks>
+    /// <param name="read">The environment reader.</param>
+    /// <param name="name">The plain variable name.</param>
+    private static (string? Value, string? Source) ReadConfiguredWithSource(Func<string, string?> read, string name)
+    {
+        if (ReadString(read, PluginOptionPrefix + name) is { } fromPlugin)
+        {
+            return (fromPlugin, PluginOptionPrefix + name);
+        }
+
+        return ReadString(read, name) is { } plain ? (plain, name) : (null, null);
+    }
+
+    /// <summary>
+    /// Wraps an environment reader so that any name resolves through the plugin-option layer first.
+    /// </summary>
+    /// <remarks>
+    /// Used for the parsed readers, which take a name rather than a value and would otherwise each
+    /// need their own two-step. <see cref="ReadInt32"/>'s variables are not mapped by the manifest,
+    /// so only <see cref="ReadBoolean"/> needs it today.
+    /// </remarks>
+    /// <param name="read">The environment reader.</param>
+    private static Func<string, string?> Layered(Func<string, string?> read) =>
+        name => ReadString(read, PluginOptionPrefix + name) ?? read(name);
+
     private static string? ReadString(Func<string, string?> read, string name)
     {
         var raw = read(name);
