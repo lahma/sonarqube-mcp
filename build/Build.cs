@@ -28,10 +28,11 @@ using Project = Fallout.Solutions.Project;
 /// The Fallout orchestrator for sonarqube-mcp.
 /// </summary>
 /// <remarks>
-/// Restore / Compile / Test come from the Fallout.Components interfaces; only the two things
-/// that are specific to shipping a Native AOT MCP server are hand-written: <c>PublishAot</c>
-/// (publish + archive per RID) and <c>SmokeTest</c> (a real stdio JSON-RPC handshake against
-/// the published binary).
+/// Restore and Compile come from the Fallout.Components interfaces. Three targets are hand-written:
+/// <c>Test</c>, because the suite runs on Microsoft.Testing.Platform and Fallout's <c>ITest</c>
+/// speaks VSTest only, and the two things specific to shipping a Native AOT MCP server -
+/// <c>PublishAot</c> (publish + archive per RID) and <c>SmokeTest</c> (a real stdio JSON-RPC
+/// handshake against the published binary).
 /// </remarks>
 [ShutdownDotNetAfterServerBuild]
 partial class Build : FalloutBuild,
@@ -42,10 +43,9 @@ partial class Build : FalloutBuild,
     IHasGitRepository,
     IRestore,
     ICompile,
-    ITest,
     ICreateGitHubRelease
 {
-    public static int Main() => Execute<Build>(x => ((ITest)x).Test);
+    public static int Main() => Execute<Build>(x => x.Test);
 
     /// <summary>The binary's product name; also the MCP <c>serverInfo.name</c> asserted by SmokeTest.</summary>
     const string ProductName = "sonarqube-mcp";
@@ -127,6 +127,7 @@ partial class Build : FalloutBuild,
     AbsolutePath TestsDirectory => RootDirectory / "tests";
     // Spelled out rather than derived from ProductName: on Linux the path is case-sensitive.
     AbsolutePath ServerProject => SourceDirectory / "SonarQube.Mcp" / "SonarQube.Mcp.csproj";
+    AbsolutePath TestProject => TestsDirectory / "SonarQube.Mcp.Tests" / "SonarQube.Mcp.Tests.csproj";
     AbsolutePath ChangelogPath => RootDirectory / "CHANGELOG.md";
     AbsolutePath PublishDirectory => ArtifactsDirectory / "publish" / Runtime;
     AbsolutePath StagingDirectory => ArtifactsDirectory / "staging" / Runtime;
@@ -203,13 +204,25 @@ partial class Build : FalloutBuild,
             ArtifactsDirectory.CreateOrCleanDirectory();
         });
 
-    IEnumerable<Project> ITest.TestProjects => Solution.GetAllProjects("*.Tests");
-
     Configure<DotNetBuildSettings> ICompile.CompileSettings => _ => _
         .SetProperty("Version", Version);
 
-    Configure<DotNetTestSettings> ITest.TestSettings => _ => _
-        .SetProperty("Version", Version);
+    /// <summary>Runs the NUnit suite on Microsoft.Testing.Platform (D11).</summary>
+    /// <remarks>
+    /// Hand-written rather than Fallout's <c>ITest</c>, which drives VSTest only
+    /// (Fallout-build/Fallout#674): it passes the project positionally and adds <c>--logger trx</c>,
+    /// and <c>dotnet test</c> in MTP mode (<c>global.json</c>'s <c>test.runner</c>) rejects both.
+    /// <c>--no-build</c> reuses what Compile built, so the configuration has to be Compile's. A
+    /// failing test exits 2 and a run that finds no test at all exits 8; either fails the target.
+    /// </remarks>
+    Target Test => _ => _
+        .Description("Runs the NUnit suite on Microsoft.Testing.Platform")
+        .DependsOn<ICompile>(x => x.Compile)
+        .Executes(() =>
+        {
+            var configuration = ((IHasConfiguration)this).Configuration;
+            DotNet($"test --project {TestProject} --configuration {configuration} --no-build --no-progress");
+        });
 
     Target PublishAot => _ => _
         .Description("Publishes a Native AOT binary for --runtime and archives it into artifacts/archives")
