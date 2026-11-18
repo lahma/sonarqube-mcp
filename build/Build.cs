@@ -361,6 +361,16 @@ partial class Build : FalloutBuild,
         Assert.True(toolNames.SequenceEqual(expected, StringComparer.Ordinal),
             $"tools/list returned [{string.Join(", ", toolNames)}], expected [{string.Join(", ", expected)}]");
 
+        // D33 on the binary itself: a mis-cased argument is answered with the right spelling, as a tool
+        // error, instead of the SDK's unexplained "An error occurred invoking 'getRule'." It is refused
+        // before the tool runs, so this needs neither a token nor the network.
+        var call = responses[ArgumentCheckId].GetProperty("result");
+        var refusal = call.GetProperty("content")[0].GetProperty("text").GetString();
+        Assert.True(
+            call.GetProperty("isError").GetBoolean() &&
+            refusal?.Contains("'RuleKey' is spelled 'ruleKey'", StringComparison.Ordinal) == true,
+            $"tools/call getRule with a mis-cased RuleKey answered '{refusal}', expected the argument-name refusal (D33)");
+
         Log.Information("Handshake OK: {Server} exposed {Count} tool(s){Mode}",
             serverName,
             toolNames.Length,
@@ -371,9 +381,10 @@ partial class Build : FalloutBuild,
 
     const int InitializeId = 1;
     const int ToolsListId = 2;
+    const int ArgumentCheckId = 3;
 
     /// <summary>
-    /// Spawns the published binary, drives one initialize / initialized / tools/list exchange and
+    /// Spawns the published binary, drives one initialize / initialized / tools/list / tools/call exchange and
     /// returns the responses keyed by JSON-RPC id.
     /// </summary>
     /// <remarks>
@@ -389,13 +400,14 @@ partial class Build : FalloutBuild,
     /// </param>
     IReadOnlyDictionary<int, JsonElement> RunHandshake(IReadOnlyDictionary<string, string> environment = null)
     {
-        // The literal ids must stay in sync with InitializeId / ToolsListId below; the JSON is
+        // The literal ids must stay in sync with InitializeId / ToolsListId / ArgumentCheckId below; the JSON is
         // written out verbatim rather than interpolated so it reads exactly as it goes on the wire.
         var requests = new[]
         {
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fallout-smoketest","version":"1.0.0"}}}""",
             """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
             """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""",
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getRule","arguments":{"RuleKey":"csharpsquid:S2259"}}}""",
         };
 
         var startInfo = new ProcessStartInfo
@@ -482,7 +494,8 @@ partial class Build : FalloutBuild,
             {
                 lock (responses)
                 {
-                    if (responses.ContainsKey(InitializeId) && responses.ContainsKey(ToolsListId))
+                    if (responses.ContainsKey(InitializeId) && responses.ContainsKey(ToolsListId) &&
+                        responses.ContainsKey(ArgumentCheckId))
                     {
                         break;
                     }

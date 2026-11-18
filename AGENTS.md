@@ -44,7 +44,7 @@ to audit — treat that as a hard constraint, not a preference.
 6. LF line endings everywhere (`.gitattributes` enforces it). `TreatWarningsAsErrors` is on —
    the compiler and analyzers are the lint step.
 
-## Design decisions (D1–D32)
+## Design decisions (D1–D33)
 
 | # | Decision |
 |---|---|
@@ -82,6 +82,7 @@ to audit — treat that as a hard constraint, not a preference.
 
 | D31 | **The plugin writes to `CLAUDE_PLUGIN_OPTION_*`, never to the plain variable names.** A Claude Code plugin manifest substitutes `${user_config.KEY}` with the option's value, and an option the user never filled in resolves to the **empty string** rather than being omitted — so mapping one onto `SONARQUBE_TOKEN` sets that variable to `""` in the child process and *shadows* whatever the user's environment already said. `SonarQubeMcpOptions` therefore reads `CLAUDE_PLUGIN_OPTION_<NAME>` first, treating blank as absent, and falls back to `<NAME>`: a filled-in option wins, a blank one changes nothing. Do not "simplify" the manifest back to the plain names — `PluginManifestTests` fails if you do, and the runtime symptom is a `404 Project doesn't exist` on a project key that was correct (issue #1). The prefix is Claude Code's own convention for the same values, so nothing new is invented. |
 | D32 | **The SDK and the target framework stay on the LTS line until a measured gain says otherwise.** `global.json` pins the .NET 10 SDK and `TargetFramework` is `net10.0`, through .NET 11 (STS, released 2026-11-10). Measured on 2026-11-18, `net11.0` made the AOT binary 1.9% larger and no faster; it ends support on the same day as .NET 10 (2028-11-14); it raises the platform floor (macOS 15, x86-64-v2); and it would stop the `dnx` package starting where only .NET 10 is installed, because a tool only ever rolls forward. ModelContextProtocol has no `net11.0` build either. The SDK stays too: the .NET 11 SDK would bring back the `NuGet.Frameworks` pin (*Package budget changes*, 2026-11-18) for a compiler and analyzers nothing here uses yet. Move at .NET 12 LTS, when RID-specific AOT tool packages take the `dnx` channel off the user's runtime, or when a .NET 11 feature is actually needed. |
+| D33 | **A call's argument names must be the advertised ones, exactly, or the tool does not run.** The SDK binds arguments by exact name and ignores the rest, so a mis-cased required argument ended as its bare "An error occurred invoking 'getRule'." and a mis-cased optional one (`ProjectKey`, `PullRequest`) was dropped without a word, answering about the default project or the main branch — verified over stdio on ModelContextProtocol 2.2.0 and 2.4.0 alike. `ToolArgumentNames`, a call-tool filter registered in `McpServerSetup.AddServer`, checks every `tools/call` against the input schema `tools/list` published and answers a tool error (`isError`, so the model can retry) naming each unknown name with the one it most likely meant (the same name in another case, then the nearest within two edits, then the one name it is a prefix of), each required argument not passed, and the accepted names. A case-only mismatch is **refused, not bound**: the boundary keeps one spelling, and the refusal names it. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -700,10 +701,16 @@ or by scanning the source tree. Do not delete one to make a change pass:
   manifest's `version` and its NuGet entry's `version` both equal the changelog's top version, and
   that its `identifier` equals `<PackageId>`. Nothing in the build reads the manifest back, so
   without this a released package would keep advertising an old version indefinitely.
+- **A call is checked against what was advertised (D33).** `ToolArgumentNamesTests` asserts that every
+  tool accepts exactly the argument names its published schema declares and refuses the rest with a
+  suggestion, and it serves the production registration (`McpServerSetup.AddServer`) over in-memory
+  pipes to a real `McpClient`: the one test that goes through `tools/call`, and the only proof the
+  filter is registered at all.
 
 `SmokeTest` is the end-to-end check the unit tests cannot be: it publishes the Native AOT binary,
 spawns it, and drives a real `initialize` / `notifications/initialized` / `tools/list` exchange over
-stdio — **twice**. The first leg runs with a clean environment and asserts `serverInfo.name` and all
+stdio — **twice** — plus one `tools/call` with a mis-cased argument, which must come back as D33's
+refusal naming the right spelling. The first leg runs with a clean environment and asserts `serverInfo.name` and all
 twenty-three tool names; the second sets `SONARQUBE_MCP_READ_ONLY=1` and asserts exactly the
 eighteen read names with none of the five writes. Both legs run with no token configured, which also proves
 the handshake completes without credentials. CI runs `Test` and `SmokeTest` on every push and pull

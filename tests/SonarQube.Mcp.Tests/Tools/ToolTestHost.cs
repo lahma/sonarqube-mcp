@@ -91,7 +91,8 @@ internal static class ToolTestHost
         int? maxPageSize = null,
         int? defaultPageSize = null,
         int? maxSourceLines = null,
-        bool readOnly = false) =>
+        bool readOnly = false,
+        string? logLevel = null) =>
         SonarQubeMcpOptions.FromEnvironment(name => name switch
         {
             "SONARQUBE_TOKEN" => token,
@@ -101,6 +102,7 @@ internal static class ToolTestHost
             "SONARQUBE_MCP_MAX_PAGE_SIZE" => Text(maxPageSize),
             "SONARQUBE_MCP_DEFAULT_PAGE_SIZE" => Text(defaultPageSize),
             "SONARQUBE_MCP_MAX_SOURCE_LINES" => Text(maxSourceLines),
+            "SONARQUBE_MCP_LOG_LEVEL" => logLevel,
             _ => null,
         });
 

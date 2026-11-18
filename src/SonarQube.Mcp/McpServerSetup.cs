@@ -45,6 +45,60 @@ internal static class McpServerSetup
         // D3: a bare ServiceCollection, not Host.CreateApplicationBuilder - no configuration
         // providers, metrics or lifetime machinery in the cold-start path.
         var services = new ServiceCollection();
+        AddServer(services, options).WithStdioServerTransport();
+
+        await using var provider = services.BuildServiceProvider();
+
+        // SonarQubeMcpOptions.FromEnvironment never throws, so a rejected SONARQUBE_URL has already
+        // silently fallen back by the time we get here. This is the first moment a logger exists to
+        // say so - and it must be a log line rather than a startup failure, because stdout is the
+        // protocol channel and a dead server has no way to explain itself.
+        var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+
+        // The error funnel's only two dependencies. Resolved here rather than passed into every tool
+        // method, so that no tool signature carries a parameter the schema then has to exclude.
+        ToolErrors.UseLoggerFactory(loggerFactory);
+        ToolErrors.UseOptions(options);
+
+        if (options.RejectedBaseUrl is { } rejected)
+        {
+            loggerFactory.CreateLogger(typeof(McpServerSetup)).LogWarning(
+                "SONARQUBE_URL is set to {Rejected}, which is not an https URL on a SonarQube Cloud host " +
+                "({AllowedHosts}); falling back to {BaseUrl}.",
+                rejected,
+                string.Join(", ", SonarQubeMcpOptions.AllowedHosts),
+                options.BaseUrl);
+        }
+
+        // The SDK registers McpServer as a singleton; running it directly is the SDK's own AOT
+        // test-app shape (D3).
+        var server = provider.GetRequiredService<McpServer>();
+
+        try
+        {
+            await server.RunAsync(shutdown.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+            // Signalled shutdown is a normal exit.
+        }
+
+        return Cli.CliDispatcher.ExitSuccess;
+    }
+
+    /// <summary>
+    /// Registers the whole server - logging, the SonarQube client, the MCP server with its request
+    /// filters and every tool class this configuration exposes - and returns the builder, to which
+    /// the caller adds a transport.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="RunStdioAsync"/> so the protocol-level tests serve the production
+    /// registration over in-memory streams rather than a copy of it.
+    /// </remarks>
+    internal static IMcpServerBuilder AddServer(IServiceCollection services, SonarQubeMcpOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(options);
 
         services.AddLogging(logging =>
         {
@@ -87,7 +141,9 @@ internal static class McpServerSetup
                 // carry (project keys, branch/pullRequest exclusivity, absent-is-not-zero, ratings).
                 serverOptions.ServerInstructions = ServerInstructions.Text;
             })
-            .WithStdioServerTransport();
+            // D33: a call whose argument names are not the advertised ones is answered before the
+            // tool runs, rather than bound partially or failed with the SDK's unexplained error.
+            .WithRequestFilters(filters => filters.AddCallToolFilter(ToolArgumentNames.Filter));
 
         // One WithTools<T>(jsonOptions) per tool class - never WithToolsFromAssembly, which is not
         // AOT-safe (IL2026). These also populate the tool collection, which is what makes the server
@@ -98,50 +154,14 @@ internal static class McpServerSetup
         builder.WithTools<MeasureReadTools>(jsonOptions);
 
         // Read-only mode is the *absence* of this registration, not a check inside the tools: the
-        // four write tools do not appear in tools/list at all, so a model never proposes a call the
+        // five write tools do not appear in tools/list at all, so a model never proposes a call the
         // server would refuse. ToolTypesFor is the single source of truth, shared with the tests.
         if (toolTypes.Contains(typeof(IssueWriteTools)))
         {
             builder.WithTools<IssueWriteTools>(jsonOptions);
         }
 
-        await using var provider = services.BuildServiceProvider();
-
-        // SonarQubeMcpOptions.FromEnvironment never throws, so a rejected SONARQUBE_URL has already
-        // silently fallen back by the time we get here. This is the first moment a logger exists to
-        // say so - and it must be a log line rather than a startup failure, because stdout is the
-        // protocol channel and a dead server has no way to explain itself.
-        var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
-
-        // The error funnel's only two dependencies. Resolved here rather than passed into every tool
-        // method, so that no tool signature carries a parameter the schema then has to exclude.
-        ToolErrors.UseLoggerFactory(loggerFactory);
-        ToolErrors.UseOptions(options);
-
-        if (options.RejectedBaseUrl is { } rejected)
-        {
-            loggerFactory.CreateLogger(typeof(McpServerSetup)).LogWarning(
-                "SONARQUBE_URL is set to {Rejected}, which is not an https URL on a SonarQube Cloud host " +
-                "({AllowedHosts}); falling back to {BaseUrl}.",
-                rejected,
-                string.Join(", ", SonarQubeMcpOptions.AllowedHosts),
-                options.BaseUrl);
-        }
-
-        // The SDK registers McpServer as a singleton; running it directly is the SDK's own AOT
-        // test-app shape (D3).
-        var server = provider.GetRequiredService<McpServer>();
-
-        try
-        {
-            await server.RunAsync(shutdown.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
-        {
-            // Signalled shutdown is a normal exit.
-        }
-
-        return Cli.CliDispatcher.ExitSuccess;
+        return builder;
     }
 
     /// <summary>
