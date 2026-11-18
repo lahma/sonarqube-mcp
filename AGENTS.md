@@ -44,7 +44,7 @@ to audit — treat that as a hard constraint, not a preference.
 6. LF line endings everywhere (`.gitattributes` enforces it). `TreatWarningsAsErrors` is on —
    the compiler and analyzers are the lint step.
 
-## Design decisions (D1–D32)
+## Design decisions (D1–D33)
 
 | # | Decision |
 |---|---|
@@ -56,7 +56,7 @@ to audit — treat that as a hard constraint, not a preference.
 | D6 | **`SonarToolJsonContext` goes first** in `TypeInfoResolverChain` (chain cleared, ours added, the SDK resolver second, then `MakeReadOnly()`), so JIT and AOT resolve identically. `SonarWireJsonContext` — the API's own shapes — is **never** chained into the MCP options: the wire vocabulary and the tool vocabulary are different languages and a shared resolver would let one leak into the other. |
 | D7 | `JsonSerializerIsReflectionEnabledByDefault=false` in the server **and** the test csproj — a missing `[JsonSerializable]` then fails in `dotnet test`, not only after an AOT publish. |
 | D8 | **Static tool methods**; `SonarApiClient` and `SonarQubeMcpOptions` as plain parameters 0 and 1 (DI-bound via `IServiceProviderIsService`, excluded from the schema); avoids per-call instance activation and is directly unit-testable. |
-| D9 | No `RuntimeIdentifiers` in the csproj (would pull ILCompiler packs per RID on every restore); the RID list lives in `Build.cs` and the release matrix, and reaches publish via `-r`. |
+| D9 | No `RuntimeIdentifiers` in the csproj (would pull ILCompiler packs per RID on every restore). The RID list lives in the release matrix and in the csproj's `ToolPackageRuntimeIdentifiers`, which only shapes the tool packages (D17) and restores nothing per RID; `ToolPackageTests` keeps the two equal, and a RID reaches publish and pack via `-r`. |
 | D10 | No `PublishSingleFile` (ignored under AOT). |
 | D11 | **NUnit 5 on Microsoft.Testing.Platform, run by a hand-written `Test` target.** `global.json` sets `test.runner`, the test project sets `EnableNUnitRunner`, and `build/Build.cs`'s `Test` runs `dotnet test --project` after `Compile`: Fallout's stock `ITest` drives VSTest only (Fallout-build/Fallout#674), and MTP mode rejects both its positional project argument and its `--logger trx`. `FixtureLifeCycle(InstancePerTestCase)` keeps a fresh instance per test, and fixtures run one at a time, NUnit's default. No mocking or assertion libraries: NUnit's own constraint model, with every string check made ordinal (see *Testing*). |
 | D12 | **Environment variables only, and `FromEnvironment` never throws.** One `SonarQubeMcpOptions` record, read once in `RunStdioAsync`; a malformed or out-of-range value falls back to the documented default and is reported through the logger (stderr) rather than by failing startup. A server that refuses to start leaves the MCP client with a dead process and no channel to complain on — stdout is the protocol. There is no config file, no `Microsoft.Extensions.Configuration` and no command-line configuration. |
@@ -64,7 +64,7 @@ to audit — treat that as a hard constraint, not a preference.
 | D14 | **`SONARQUBE_URL` is allowlisted, not merely parsed**: `https` only, and the host must be `sonarcloud.io`, `www.sonarcloud.io` or `sonarqube.us`. Anything else falls back to the default (D12) and logs a warning. This is what keeps "Cloud only" a property of the binary rather than a sentence in a README. |
 | D15 | **CLI modes on the same binary** (argv dispatch, hand-rolled parsing): `serve` (the default with no args), `status`, `version`, `help`. `Cli/` may use stdout; server mode never does. `status` is the whole support surface — it prints what the server would use and probes the credential. |
 | D16 | **Redirects are not followed at all.** The transport sets `AllowAutoRedirect = false` and a 3xx becomes a `SonarApiException` naming the `Location`. No `api/` endpoint on Cloud is expected to redirect, and `SocketsHttpHandler` strips `Authorization` on every automatic redirect anyway — so a followed redirect would either be an anonymous request presented as an authenticated one, or a credential sent somewhere the allowlist never approved. Loud beats silent. |
-| D17 | **NuGet is a second distribution channel, not the primary one.** `dotnet pack` produces `mcp-sonarqube`, a framework-dependent .NET tool package (`PackAsTool`) carrying `PackageType=McpServer` and an embedded `.mcp/server.json`, so `dnx mcp-sonarqube@{version}` works without a download step; the Native AOT binaries stay the recommended way to run the server. **The NuGet package id is the one name that is not `sonarqube-mcp`** — on 2026-08-22 two pushes of v1.0.0 were answered `Conflict` by nuget.org: first `sonarqube-mcp`, then `sonarcloud-mcp`, so SonarSource evidently holds **both** the `SonarQube*` and the `SonarCloud*` reserved id prefixes. The id therefore leads with `mcp-`, which is unreserved — many independent owners publish `mcp-*` packages. Only `<PackageId>`, `.mcp/server.json`'s `identifier` and its NuGet entry, the plugin's `dnx` argument and the prose that quotes them moved; `AssemblyName`, `ToolCommandName`, the MCP server `name`, the plugin and marketplace names, the archive names and the namespaces are all still `sonarqube-mcp`, so `dnx mcp-sonarqube` installs and runs a command called `sonarqube-mcp`. Do not "fix" the mismatch by renaming anything else, and do not retry a `Sonar*` id: the id a package is fetched by is not the name it runs under, and the reservations are not going away. It is pushed by **trusted publishing** — the workflow exchanges its GitHub OIDC token for an API key that lives minutes — so no NuGet API key exists in the repository or in GitHub secrets. The exchange is **C# inside the build** (`build/Build.Publish.cs`), not a marketplace action. It has its own generated workflow file, `.github/workflows/publish.yml`, triggered by `v*.*.*` tags only. Since 1.2.0 the package is also **listable in the MCP Registry** as `io.github.lahma/sonarqube-mcp`: `.mcp/server.json` follows the `2025-12-11` schema, names the NuGet registry by its only accepted base URL (`https://api.nuget.org/v3/index.json`), keeps `description` within the registry's 100 characters (`McpServerManifestTests` asserts all three), and the packed README carries the `mcp-name:` ownership marker the registry checks inside the published version. Publishing to the registry is not automated yet; when it is, the GitHub OIDC exchange belongs in the build, like the NuGet one. |
+| D17 | **NuGet is a second distribution channel for the same Native AOT binary.** Since 1.3.0 `mcp-sonarqube` is a set of RID-specific .NET tool packages: the pointer package (`dotnet pack`, carrying `PackageType=McpServer` and an embedded `.mcp/server.json`) names `mcp-sonarqube.<rid>` for each of the five release RIDs — each packed by its own `release.yml` leg with `dotnet pack -r <rid>` (`PackRuntime`), because Native AOT cannot cross-compile across operating systems, and handshake-tested from the binary inside the package — plus `mcp-sonarqube.any`, a framework-dependent fallback (`dotnet pack -r any -p:PublishAot=false`, handshake-tested through `dotnet sonarqube-mcp.dll`). `dnx mcp-sonarqube@{version}` resolves the pointer and fetches the package for the user's platform: measured on win-x64, `initialize` + `tools/list` through `dnx` dropped from 715 ms (1.2.0, framework-dependent) to 357 ms. The archives on GitHub Releases remain the fastest start, without `dnx`'s package resolution. The SDK types the RID packages `DotnetToolRidPackage` only, so `McpServer` stays on the pointer alone, which nuget.org requires (it refuses `McpServer` without `DotnetTool`). **The NuGet package id is the one name that is not `sonarqube-mcp`** — on 2026-08-22 two pushes of v1.0.0 were answered `Conflict` by nuget.org: first `sonarqube-mcp`, then `sonarcloud-mcp`, so SonarSource evidently holds **both** the `SonarQube*` and the `SonarCloud*` reserved id prefixes. The id therefore leads with `mcp-`, which is unreserved — many independent owners publish `mcp-*` packages. Only `<PackageId>`, `.mcp/server.json`'s `identifier` and its NuGet entry, the plugin's `dnx` argument and the prose that quotes them moved; `AssemblyName`, `ToolCommandName`, the MCP server `name`, the plugin and marketplace names, the archive names and the namespaces are all still `sonarqube-mcp`, so `dnx mcp-sonarqube` installs and runs a command called `sonarqube-mcp`. Do not "fix" the mismatch by renaming anything else, and do not retry a `Sonar*` id: the id a package is fetched by is not the name it runs under, and the reservations are not going away. It is pushed by **trusted publishing** — the workflow exchanges its GitHub OIDC token for an API key that lives minutes — so no NuGet API key exists in the repository or in GitHub secrets. The exchange is **C# inside the build** (`build/Build.Publish.cs`), not a marketplace action. It has its own generated workflow file, `.github/workflows/publish.yml`, triggered by `v*.*.*` tags only; that file is the only one the policy names, so its job **collects** the five RID packages from the same tag's `release.yml` run (`CollectRuntimePackages`, through the run's artifacts and `actions: read`) and pushes every RID package first and the pointer last, stopping at the first failure — a pointer that is live before its packages is an install that fails. The five RID ids were new in 1.3.0, so the policy must allow publishing new packages, not only new versions. Since 1.2.0 the package is also **listable in the MCP Registry** as `io.github.lahma/sonarqube-mcp`: `.mcp/server.json` follows the `2025-12-11` schema, names the NuGet registry by its only accepted base URL (`https://api.nuget.org/v3/index.json`), keeps `description` within the registry's 100 characters (`McpServerManifestTests` asserts all three), and the packed README carries the `mcp-name:` ownership marker the registry checks inside the published version. Since 1.3.0 `PublishMcpRegistry` publishes it from the same job: it waits until nuget.org serves that version's README through the `ReadmeUriTemplate/6.13.0` resource the registry reads, then exchanges a GitHub OIDC token (audience `https://registry.modelcontextprotocol.io`) at `/v0/auth/github-oidc` and posts `server.json` to `/v0/publish` — in C# inside the build, like the NuGet exchange. A registry version is immutable once published. |
 | D18 | **Paging is `p`/`ps`, and there are no cursors.** SonarQube's paging is a pair of integers; there is nothing opaque to encode, so inventing a cursor would add an SSRF surface (a model-supplied URL to validate) for no benefit. `ToolDefaults.ResolvePaging` clamps `pageSize` to `SONARQUBE_MCP_MAX_PAGE_SIZE` silently and enforces the API's 10,000-result cap **before the request leaves the process**, turning `Can return only the first 10000 results` into an instruction to narrow the search. Every paginated result carries the same envelope: `page`, `pageSize`, `totalCount`, `hasMore`, `note?`. |
 | D19 | **`organization` comes from `SONARQUBE_ORG` and is never a tool parameter.** One organization per server instance is the normal case; a model cannot discover an org key it was not told, and a wrong one is an opaque 400. Two organizations means two server entries in the client configuration, which is one line of JSON. `ToolDefaults.RequireOrganization` throws an `McpException` naming the variable and explaining that it is the `/organizations/{key}` segment of the URL. |
 | D20 | **`projectKey` is optional everywhere, defaulted from `SONARQUBE_MCP_DEFAULT_PROJECT`.** An MCP server is configured per checkout in practice, and the Sonar project key is not guessable from the directory name — pinning it in the environment removes the single most common source of 404s. Neither set is an `McpException` naming the variable and pointing at `listProjects`. |
@@ -82,6 +82,7 @@ to audit — treat that as a hard constraint, not a preference.
 
 | D31 | **The plugin writes to `CLAUDE_PLUGIN_OPTION_*`, never to the plain variable names.** A Claude Code plugin manifest substitutes `${user_config.KEY}` with the option's value, and an option the user never filled in resolves to the **empty string** rather than being omitted — so mapping one onto `SONARQUBE_TOKEN` sets that variable to `""` in the child process and *shadows* whatever the user's environment already said. `SonarQubeMcpOptions` therefore reads `CLAUDE_PLUGIN_OPTION_<NAME>` first, treating blank as absent, and falls back to `<NAME>`: a filled-in option wins, a blank one changes nothing. Do not "simplify" the manifest back to the plain names — `PluginManifestTests` fails if you do, and the runtime symptom is a `404 Project doesn't exist` on a project key that was correct (issue #1). The prefix is Claude Code's own convention for the same values, so nothing new is invented. |
 | D32 | **The SDK and the target framework stay on the LTS line until a measured gain says otherwise.** `global.json` pins the .NET 10 SDK and `TargetFramework` is `net10.0`, through .NET 11 (STS, released 2026-11-10). Measured on 2026-11-18, `net11.0` made the AOT binary 1.9% larger and no faster; it ends support on the same day as .NET 10 (2028-11-14); it raises the platform floor (macOS 15, x86-64-v2); and it would stop the `dnx` package starting where only .NET 10 is installed, because a tool only ever rolls forward. ModelContextProtocol has no `net11.0` build either. The SDK stays too: the .NET 11 SDK would bring back the `NuGet.Frameworks` pin (*Package budget changes*, 2026-11-18) for a compiler and analyzers nothing here uses yet. Move at .NET 12 LTS, when RID-specific AOT tool packages take the `dnx` channel off the user's runtime, or when a .NET 11 feature is actually needed. |
+| D33 | **A call's argument names must be the advertised ones, exactly, or the tool does not run.** The SDK binds arguments by exact name and ignores the rest, so a mis-cased required argument ended as its bare "An error occurred invoking 'getRule'." and a mis-cased optional one (`ProjectKey`, `PullRequest`) was dropped without a word, answering about the default project or the main branch — verified over stdio on ModelContextProtocol 2.2.0 and 2.4.0 alike. `ToolArgumentNames`, a call-tool filter registered in `McpServerSetup.AddServer`, checks every `tools/call` against the input schema `tools/list` published and answers a tool error (`isError`, so the model can retry) naming each unknown name with the one it most likely meant (the same name in another case, then the nearest within two edits, then the one name it is a prefix of), each required argument not passed, and the accepted names. A case-only mismatch is **refused, not bound**: the boundary keeps one spelling, and the refusal names it. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -452,9 +453,14 @@ things about it are deliberate:
 Validate both manifests with the official CLI, which is non-interactive:
 
 ```powershell
-claude plugin validate . --strict          # the marketplace manifest
+claude plugin validate .                   # the marketplace manifest
 claude plugin marketplace add .            # resolves it; remove afterwards
 ```
+
+Expect exactly two warnings, which is why `--strict` (warnings as errors) is not the check: the
+validator notes that `CLAUDE.md` at the plugin root is not loaded as plugin context — it is the
+repository's own agent guidance, there because the plugin root *is* the repository root — and that
+the plugin has no listing icon. Anything beyond those two is a real finding.
 
 ### The budget of attention
 
@@ -562,6 +568,13 @@ holding xunit at 3.x — `ITest`'s VSTest reporting — went with `ITest` itself
 test: 637 run and 2 skipped before and after, the same 372 method names and the same count per class,
 and a deliberately broken assertion failed the run.
 
+**2026-11-18 — no GitHub test reporter, and no test telemetry.** bitbucket-mcp, on the same stack,
+added `GitHubActionsTestLogger` for `--report-github` annotations and a job summary. Declined here:
+the runner's console output already names a failing test with its assertion, and a CI nicety is not
+worth a package (and its own graph) in a project whose point is a dependency tree one person can
+audit. The telemetry extension Microsoft.Testing.Platform brings in through the adapter is switched
+off by the `Test` target (`TESTINGPLATFORM_TELEMETRY_OPTOUT=1`), which costs nothing.
+
 The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
 `Fallout.Common` as a transitive dependency — no new `PackageReference` anywhere, and
 nothing added to `src/` or `tests/`.
@@ -596,7 +609,8 @@ src/SonarQube.Mcp/          One production project (D1); AssemblyName sonarqube-
   Tools/Models/             Result records and SonarToolJsonContext (camelCase)
 tests/SonarQube.Mcp.Tests/  The single test project; internals visible via InternalsVisibleTo
 build/                      The Fallout orchestrator (Build.cs, Build.Publish.cs,
-                            Build.CI.GitHubActions.cs, ReleaseNotesParser.cs, SemVersion.cs) —
+                            Build.CI.GitHubActions.cs, GlibcRequirements.cs,
+                            ReleaseNotesParser.cs, SemVersion.cs) —
                             `build/` is a resolver convention, and `.gitignore` must never
                             untrack it
 ```
@@ -615,15 +629,17 @@ hard fork of NUKE. The CLI is pinned in `.config/dotnet-tools.json` as `fallout.
 ```powershell
 .\build.ps1 Test          # restore, compile, run tests
 .\build.ps1 SmokeTest     # AOT publish + two real stdio JSON-RPC handshakes against the binary
-.\build.ps1 Pack          # the NuGet tool package (D17) into artifacts/packages
+.\build.ps1 Pack          # the pointer and the 'any' tool packages (D17) into artifacts/packages
+.\build.ps1 PackRuntime   # the Native AOT tool package for this machine's RID (or --runtime)
 ```
 
-`PublishAot` is switched **off when no `RuntimeIdentifier` is set**. `dotnet pack` of a tool
-package packs `$(PublishDir)`, so it runs a publish of the server project; left at `true` that
-publish fails with *RuntimeIdentifier is required for native compilation* (D9 deliberately keeps
-RIDs out of the csproj). The AOT publish always passes `-r`, so keying the property off
-`RuntimeIdentifier` gives the release path AOT and the pack path a portable IL tool from the same
-project file.
+`PublishAot` is always `true`, which is also what keeps the AOT and trim analyzers on for every
+build. With `ToolPackageRuntimeIdentifiers` set, a RID-less `dotnet pack` builds only the pointer
+package and publishes nothing; `dotnet pack -r <rid>` publishes and packs one native package, and
+`-r any -p:PublishAot=false` the framework-dependent fallback. Neither symbols nor the XML
+documentation are copied to publish output (`CopyOutputSymbolsToPublishDirectory`,
+`PublishDocumentationFile`): Native AOT's symbols alone are 99 MB on Windows, and no shipped file
+ever needed them.
 
 `CHANGELOG.md` is the **version authority**: its top section is parsed in `OnBuildInitialized`
 and passed to the build as the version. The file is never mutated by the build, and the first
@@ -700,22 +716,34 @@ or by scanning the source tree. Do not delete one to make a change pass:
   manifest's `version` and its NuGet entry's `version` both equal the changelog's top version, and
   that its `identifier` equals `<PackageId>`. Nothing in the build reads the manifest back, so
   without this a released package would keep advertising an old version indefinitely.
+- **A call is checked against what was advertised (D33).** `ToolArgumentNamesTests` asserts that every
+  tool accepts exactly the argument names its published schema declares and refuses the rest with a
+  suggestion, and it serves the production registration (`McpServerSetup.AddServer`) over in-memory
+  pipes to a real `McpClient`: the one test that goes through `tools/call`, and the only proof the
+  filter is registered at all.
+- **The tool package names the runtimes the release builds.** `ToolPackageTests` holds the csproj's
+  `ToolPackageRuntimeIdentifiers` (without `any`) equal to `release.yml`'s matrix, requires the `any`
+  fallback, and checks that every leg uploads its package under the `tool-package-` name the publish
+  job collects. A runtime in only one of the two lists would first show at release time.
 
 `SmokeTest` is the end-to-end check the unit tests cannot be: it publishes the Native AOT binary,
 spawns it, and drives a real `initialize` / `notifications/initialized` / `tools/list` exchange over
-stdio — **twice**. The first leg runs with a clean environment and asserts `serverInfo.name` and all
+stdio — **twice** — plus one `tools/call` with a mis-cased argument, which must come back as D33's
+refusal naming the right spelling. The first leg runs with a clean environment and asserts `serverInfo.name` and all
 twenty-three tool names; the second sets `SONARQUBE_MCP_READ_ONLY=1` and asserts exactly the
 eighteen read names with none of the five writes. Both legs run with no token configured, which also proves
-the handshake completes without credentials. CI runs `Test` and `SmokeTest` on every push and pull
-request.
+the handshake completes without credentials. CI runs `Test`, `SmokeTest` and `Pack` on every push
+and pull request; `Pack` handshakes the framework-dependent fallback, and each release leg's
+`PackRuntime` does the same for the binary inside its native package.
 
 ## Release engineering
 
-Releases are cut by pushing a `v*` tag, which starts **two independent workflows**:
-`release.yml` (binaries + the GitHub Release) and `publish.yml` (nuget.org, D17 — *The NuGet leg*
-below). They do not depend on each other, deliberately: the AOT binaries are the product, so a
-nuget.org outage or a policy mismatch must not be able to hold up the GitHub Release, and neither
-must the reverse.
+Releases are cut by pushing a `v*` tag, which starts **two workflows**: `release.yml` (binaries,
+native tool packages and the GitHub Release) and `publish.yml` (nuget.org and the MCP Registry,
+D17 — *The NuGet leg* below). `publish.yml` waits for the release legs' tool packages, because only
+those runners can build them, but never for the GitHub Release itself; and nothing in `release.yml`
+waits for `publish.yml`. So a nuget.org or registry outage, or a policy mismatch, cannot hold up the
+GitHub Release, while a failed leg stops both — there is no release with a binary missing.
 
 `.github/workflows/release.yml` is hand-written (the `[GitHubActions]` generator has no matrix
 support) and runs five publish legs — one per RID, each on its own hardware — followed by a
@@ -729,9 +757,10 @@ support) and runs five publish legs — one per RID, each on its own hardware �
 | `win-arm64` | `windows-11-arm` |
 | `osx-arm64` | `macos-latest` |
 
-Every leg runs `dotnet fallout SmokeTest --runtime <rid>`, and `SmokeTest` depends on `PublishAot`,
-so each leg compiles its own binary, speaks JSON-RPC to it *on the architecture it targets*, and
-only then uploads the archive. **Never ship a binary that has not answered a handshake on its own
+Every leg runs `dotnet fallout SmokeTest PackRuntime --runtime <rid>`. `SmokeTest` depends on
+`PublishAot`, so each leg compiles its own binary, speaks JSON-RPC to it *on the architecture it
+targets*, and only then uploads the archive; `PackRuntime` packs the leg's native tool package and
+handshakes the binary inside it the same way before uploading it as `tool-package-<rid>`. **Never ship a binary that has not answered a handshake on its own
 architecture** — that is why the arm64 legs run on arm64 runners instead of being cross-compiled.
 `fail-fast` is off so one broken runtime cannot mask the state of the other four. A manual run
 (`workflow_dispatch`) builds and smoke-tests all five legs and releases nothing, because the
@@ -779,8 +808,11 @@ entries as `- ` bullets with wrapped continuation lines and this keeps working.
 
 `.github/workflows/publish.yml` is **generated** from the second `[GitHubActions]` attribute in
 `build/Build.CI.GitHubActions.cs` (hard rule 3 — never hand-edit it). One Ubuntu job runs
-`dotnet fallout Compile Test Pack Publish` with `permissions: { contents: read, id-token: write }`,
-`environment: nuget` and `env: NUGET_USER: lahma`.
+`dotnet fallout Compile Test Pack Publish PublishMcpRegistry` with
+`permissions: { contents: read, actions: read, id-token: write }`, the `GITHUB_TOKEN` (which
+`CollectRuntimePackages` reads `release.yml`'s artifacts with), `environment: nuget` and
+`env: NUGET_USER: lahma`. `--release-run-id <id>` points `CollectRuntimePackages` at a manual
+`release.yml` run, which is how the collection is checked before a tag exists.
 
 Three shapes are load-bearing and were chosen, not defaulted:
 

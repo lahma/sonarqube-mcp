@@ -1,6 +1,6 @@
 ---
 title: "1.2.0: Fallout 10.5.0, dependency refresh, API deprecations and gaps (.NET 11 deferred)"
-status: in-progress
+status: done
 created: 2026-11-18
 summary: "Stay on the .NET 10 SDK and net10.0, as agreed with bitbucket-mcp: .NET 11 gains nothing measurable here. Move to Fallout 10.5.0 and drop the NuGet.Frameworks pin, refresh packages (MCP SDK 2.4.0), move the tests to NUnit on Microsoft.Testing.Platform, harden the release path, move off the two deprecated SonarQube endpoints, close the cheap gaps, and make the package listable in the MCP Registry."
 ---
@@ -184,7 +184,7 @@ The open design question is how that job gets the nupkgs. The policy names `publ
 - [x] `CHANGELOG.md` `# 1.2.0` entry. Bullets only; it is the version authority.
 - [x] Versions: `.mcp/server.json` (both fields), `.claude-plugin/plugin.json` (version and `dnx` pin), and `VersionPrefix` in `Directory.Build.props`. `PluginManifestTests` and `McpServerManifestTests` enforce the first two.
 - [x] `README.md`: the hotspot deprecation, any 4b parameters, and one sentence that `HTTPS_PROXY`/`NO_PROXY` are honoured.
-- [ ] CI green, `release` dry run green on all five legs, then tag `v1.2.0` (release approved by the user on 2026-11-18).
+- [x] CI green, `release` dry run green on all five legs, then tag `v1.2.0` (release approved by the user on 2026-11-18). Released 2026-11-18: PR #2 merged as `2304b51`, GitHub Release `v1.2.0` with five archives, `mcp-sonarqube` 1.2.0 on nuget.org and runnable through `dnx`.
 
 ## Verification recipe (CI path, locally)
 

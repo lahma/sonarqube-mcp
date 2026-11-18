@@ -26,8 +26,6 @@ namespace SonarQube.Mcp.Tests;
 /// </remarks>
 public class McpServerManifestTests
 {
-    /// <summary>The file that identifies the repository root when walking up from the test assembly.</summary>
-    private const string RootMarker = "sonarqube-mcp.slnx";
 
     private const string ManifestPath = ".mcp/server.json";
     private const string ChangelogPath = "CHANGELOG.md";
@@ -36,7 +34,7 @@ public class McpServerManifestTests
     [Test]
     public void ManifestVersionMatchesTheChangelog()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryRoot.FullPath;
         var changelogVersion = ReadChangelogVersion(root);
 
         using var manifest = ReadManifest(root);
@@ -49,7 +47,7 @@ public class McpServerManifestTests
     [Test]
     public void ManifestIdentifierMatchesThePackagedId()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryRoot.FullPath;
 
         var packageId = XDocument
             .Load(Path.Combine(root, ServerProjectPath))
@@ -71,7 +69,7 @@ public class McpServerManifestTests
     [Test]
     public void ManifestDeclaresExactlyOneStdioNuGetPackage()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryRoot.FullPath;
         using var manifest = ReadManifest(root);
 
         var package = SingleNuGetPackage(manifest);
@@ -91,7 +89,7 @@ public class McpServerManifestTests
     [Test]
     public void ManifestDeclaresTheClientFacingEnvironmentVariables()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryRoot.FullPath;
         using var manifest = ReadManifest(root);
 
         var variables = SingleNuGetPackage(manifest)
@@ -140,7 +138,7 @@ public class McpServerManifestTests
     [Test]
     public void ManifestIsListableInTheMcpRegistry()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryRoot.FullPath;
         using var manifest = ReadManifest(root);
 
         Assert.That(
@@ -181,22 +179,5 @@ public class McpServerManifestTests
 
         Assert.That(first, Does.StartWith("# ").Using(StringComparison.Ordinal));
         return first[2..].Trim();
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, RootMarker)))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException($"Could not find {RootMarker} above {AppContext.BaseDirectory}.");
     }
 }

@@ -213,7 +213,8 @@ partial class Build : FalloutBuild,
     /// (Fallout-build/Fallout#674): it passes the project positionally and adds <c>--logger trx</c>,
     /// and <c>dotnet test</c> in MTP mode (<c>global.json</c>'s <c>test.runner</c>) rejects both.
     /// <c>--no-build</c> reuses what Compile built, so the configuration has to be Compile's. A
-    /// failing test exits 2 and a run that finds no test at all exits 8; either fails the target.
+    /// failing test exits 2 and a run that finds no test at all exits 8; either fails the target. The
+    /// platform's telemetry extension arrives with the NUnit adapter; it is switched off for the run.
     /// </remarks>
     Target Test => _ => _
         .Description("Runs the NUnit suite on Microsoft.Testing.Platform")
@@ -221,6 +222,7 @@ partial class Build : FalloutBuild,
         .Executes(() =>
         {
             var configuration = ((IHasConfiguration)this).Configuration;
+            Environment.SetEnvironmentVariable("TESTINGPLATFORM_TELEMETRY_OPTOUT", "1");
             DotNet($"test --project {TestProject} --configuration {configuration} --no-build --no-progress");
         });
 
@@ -245,7 +247,7 @@ partial class Build : FalloutBuild,
             Assert.True(PublishedExecutable.FileExists(),
                 $"Native AOT publish did not produce '{PublishedExecutable}'");
 
-            var glibc = IsLinuxRuntime ? AssertGlibcFloor() : null;
+            var glibc = IsLinuxRuntime ? AssertGlibcFloor(PublishedExecutable) : null;
 
             // Archive exactly the three files a user needs, not the whole publish directory.
             StagingDirectory.CreateOrCleanDirectory();
@@ -283,26 +285,26 @@ partial class Build : FalloutBuild,
         });
 
     /// <summary>
-    /// R3: fails when the published Linux binary needs a newer glibc than <see cref="MaxGlibc"/>, and
-    /// returns the version it does need.
+    /// R3: fails when a Linux binary needs a newer glibc than <see cref="MaxGlibc"/>, and returns the
+    /// version it does need.
     /// </summary>
-    string AssertGlibcFloor()
+    string AssertGlibcFloor(AbsolutePath executable)
     {
-        var needed = GlibcRequirements.Read(PublishedExecutable);
+        var needed = GlibcRequirements.Read(executable);
         if (needed.Count == 0)
         {
-            Log.Information("{Executable} names no glibc version", PublishedExecutable);
+            Log.Information("{Executable} names no glibc version", executable);
             return null;
         }
 
         var highest = needed[^1];
         Assert.True(highest <= MaxGlibc,
-            $"'{PublishedExecutable}' needs GLIBC_{highest}, newer than the recorded floor GLIBC_{MaxGlibc}, so it " +
+            $"'{executable}' needs GLIBC_{highest}, newer than the recorded floor GLIBC_{MaxGlibc}, so it " +
             "would no longer start on every Linux README.md promises. The build image has most likely moved: build " +
             "on the older one, or raise MaxGlibc in build/Build.cs and the README's requirement on purpose.");
 
         Log.Information("{Executable} needs glibc {Highest} or newer (floor {Floor})",
-            PublishedExecutable, highest, MaxGlibc);
+            executable, highest, MaxGlibc);
         return highest.ToString();
     }
 
@@ -311,36 +313,52 @@ partial class Build : FalloutBuild,
         .DependsOn(PublishAot)
         .Executes(() =>
         {
-            // Leg 1: a clean environment. No token is configured, which proves the handshake
-            // completes without credentials.
-            var fullNames = Handshake(environment: null, ExpectedToolNames);
-
-            // Leg 2: the same handshake with the read-only flag set. This is the end-to-end proof
-            // that the flag removes the write tools from *registration* rather than rejecting them
-            // at call time - a runtime check would still list them here.
-            var readOnlyExpected = ExpectedToolNames.Except(WriteToolNames, StringComparer.Ordinal).ToArray();
-            var readOnlyNames = Handshake(
-                new Dictionary<string, string> { ["SONARQUBE_MCP_READ_ONLY"] = "1" },
-                readOnlyExpected);
-
-            foreach (var write in WriteToolNames)
-            {
-                Assert.True(!readOnlyNames.Contains(write, StringComparer.Ordinal),
-                    $"tools/list under SONARQUBE_MCP_READ_ONLY=1 still returned the write tool '{write}'");
-            }
+            var (tools, readOnlyTools) = AssertServerAnswers(PublishedServer);
 
             ReportSummary(_ => _
-                .AddPair("Tools", fullNames.Length.ToString())
-                .AddPair("Read-only tools", readOnlyNames.Length.ToString()));
+                .AddPair("Tools", tools.ToString())
+                .AddPair("Read-only tools", readOnlyTools.ToString()));
         });
+
+    /// <summary>How to start one server under test: a native binary, or <c>dotnet</c> with a framework-dependent dll.</summary>
+    sealed record ServerUnderTest(string FileName, string Arguments, string WorkingDirectory);
+
+    ServerUnderTest PublishedServer => new(PublishedExecutable, string.Empty, PublishDirectory);
+
+    /// <summary>
+    /// The two handshake legs every shipped binary must pass, returning how many tools each listed.
+    /// </summary>
+    (int Tools, int ReadOnlyTools) AssertServerAnswers(ServerUnderTest server)
+    {
+        // Leg 1: a clean environment. No token is configured, which proves the handshake completes
+        // without credentials.
+        var fullNames = Handshake(server, environment: null, ExpectedToolNames);
+
+        // Leg 2: the same handshake with the read-only flag set. This is the end-to-end proof that the
+        // flag removes the write tools from *registration* rather than rejecting them at call time - a
+        // runtime check would still list them here.
+        var readOnlyExpected = ExpectedToolNames.Except(WriteToolNames, StringComparer.Ordinal).ToArray();
+        var readOnlyNames = Handshake(
+            server,
+            new Dictionary<string, string> { ["SONARQUBE_MCP_READ_ONLY"] = "1" },
+            readOnlyExpected);
+
+        foreach (var write in WriteToolNames)
+        {
+            Assert.True(!readOnlyNames.Contains(write, StringComparer.Ordinal),
+                $"tools/list under SONARQUBE_MCP_READ_ONLY=1 still returned the write tool '{write}'");
+        }
+
+        return (fullNames.Length, readOnlyNames.Length);
+    }
 
     /// <summary>
     /// Drives one handshake and asserts the inventory it answers with, returning the names for any
     /// further assertion the caller wants to make.
     /// </summary>
-    string[] Handshake(IReadOnlyDictionary<string, string> environment, string[] expectedToolNames)
+    string[] Handshake(ServerUnderTest server, IReadOnlyDictionary<string, string> environment, string[] expectedToolNames)
     {
-        var responses = RunHandshake(environment);
+        var responses = RunHandshake(server, environment);
 
         var serverName = responses[InitializeId]
             .GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString();
@@ -361,6 +379,16 @@ partial class Build : FalloutBuild,
         Assert.True(toolNames.SequenceEqual(expected, StringComparer.Ordinal),
             $"tools/list returned [{string.Join(", ", toolNames)}], expected [{string.Join(", ", expected)}]");
 
+        // D33 on the binary itself: a mis-cased argument is answered with the right spelling, as a tool
+        // error, instead of the SDK's unexplained "An error occurred invoking 'getRule'." It is refused
+        // before the tool runs, so this needs neither a token nor the network.
+        var call = responses[ArgumentCheckId].GetProperty("result");
+        var refusal = call.GetProperty("content")[0].GetProperty("text").GetString();
+        Assert.True(
+            call.GetProperty("isError").GetBoolean() &&
+            refusal?.Contains("'RuleKey' is spelled 'ruleKey'", StringComparison.Ordinal) == true,
+            $"tools/call getRule with a mis-cased RuleKey answered '{refusal}', expected the argument-name refusal (D33)");
+
         Log.Information("Handshake OK: {Server} exposed {Count} tool(s){Mode}",
             serverName,
             toolNames.Length,
@@ -371,9 +399,10 @@ partial class Build : FalloutBuild,
 
     const int InitializeId = 1;
     const int ToolsListId = 2;
+    const int ArgumentCheckId = 3;
 
     /// <summary>
-    /// Spawns the published binary, drives one initialize / initialized / tools/list exchange and
+    /// Spawns the server, drives one initialize / initialized / tools/list / tools/call exchange and
     /// returns the responses keyed by JSON-RPC id.
     /// </summary>
     /// <remarks>
@@ -387,21 +416,23 @@ partial class Build : FalloutBuild,
     /// which is how the read-only leg differs from the first one. Null inherits the environment
     /// unchanged.
     /// </param>
-    IReadOnlyDictionary<int, JsonElement> RunHandshake(IReadOnlyDictionary<string, string> environment = null)
+    IReadOnlyDictionary<int, JsonElement> RunHandshake(ServerUnderTest server, IReadOnlyDictionary<string, string> environment = null)
     {
-        // The literal ids must stay in sync with InitializeId / ToolsListId below; the JSON is
+        // The literal ids must stay in sync with InitializeId / ToolsListId / ArgumentCheckId below; the JSON is
         // written out verbatim rather than interpolated so it reads exactly as it goes on the wire.
         var requests = new[]
         {
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fallout-smoketest","version":"1.0.0"}}}""",
             """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
             """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""",
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getRule","arguments":{"RuleKey":"csharpsquid:S2259"}}}""",
         };
 
         var startInfo = new ProcessStartInfo
                         {
-                            FileName = PublishedExecutable,
-                            WorkingDirectory = PublishDirectory,
+                            FileName = server.FileName,
+                            Arguments = server.Arguments,
+                            WorkingDirectory = server.WorkingDirectory,
                             UseShellExecute = false,
                             RedirectStandardInput = true,
                             RedirectStandardOutput = true,
@@ -436,7 +467,7 @@ partial class Build : FalloutBuild,
             }
         };
 
-        Log.Information("Starting {Executable}", PublishedExecutable);
+        Log.Information("Starting {Executable} {Arguments}", server.FileName, server.Arguments);
         process.Start();
         process.BeginErrorReadLine();
 
@@ -482,7 +513,8 @@ partial class Build : FalloutBuild,
             {
                 lock (responses)
                 {
-                    if (responses.ContainsKey(InitializeId) && responses.ContainsKey(ToolsListId))
+                    if (responses.ContainsKey(InitializeId) && responses.ContainsKey(ToolsListId) &&
+                        responses.ContainsKey(ArgumentCheckId))
                     {
                         break;
                     }

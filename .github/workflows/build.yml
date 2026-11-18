@@ -49,5 +49,5 @@ jobs:
           global-json-file: global.json
       - name: 'Restore: dotnet tools'
         run: dotnet tool restore
-      - name: 'Run: Test, SmokeTest'
-        run: dotnet fallout Test SmokeTest
+      - name: 'Run: Test, SmokeTest, Pack'
+        run: dotnet fallout Test SmokeTest Pack

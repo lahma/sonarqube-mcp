@@ -1,3 +1,26 @@
+# 1.3.0
+
+- **`dnx` now runs the native binary.** The NuGet package is now a set of RID-specific tool
+  packages. `mcp-sonarqube` names one package per release platform (Windows, Linux and macOS, x64
+  and Arm64 as released), each holding the Native AOT binary from the matching release archive,
+  plus a framework-dependent `mcp-sonarqube.any` for every other platform; `dnx` picks the right one
+  by itself. Measured on Windows x64, a client's first answer through `dnx` went from 715 ms to
+  357 ms, and on those five platforms the server needs no .NET runtime of its own. Every binary in
+  those packages answered a handshake on its own architecture before it was published, as the
+  archives' always have, and the packages no longer carry debug symbols (99 MB on Windows).
+- **A mis-cased or unknown argument is now refused, with the right spelling.** `getRule` called with
+  `RuleKey` used to fail with only "An error occurred invoking 'getRule'.", and an optional argument
+  in the wrong case, such as `ProjectKey` or `PullRequest`, was silently dropped, so the call
+  answered about the default project or the main branch instead. Every call is now checked against
+  the argument names the tool advertises before it runs. A wrong name is answered with the one it
+  most likely meant and the accepted list, and a missing required argument is named. Argument names
+  are case-sensitive.
+- **Listed in the MCP Registry** as `io.github.lahma/sonarqube-mcp`, published by the release
+  workflow from this version on.
+- Build and release: each release leg packs and handshake-tests its platform's tool package, and the
+  publish job collects all five and pushes them ahead of the package that names them. Test runs opt
+  out of the test platform's telemetry.
+
 # 1.2.0
 
 - **`getQualityGateStatus` no longer depends on a deprecated endpoint.** SonarQube Cloud deprecated

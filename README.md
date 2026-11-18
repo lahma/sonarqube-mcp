@@ -58,10 +58,11 @@ before trusting a gate, an issue list or a measure.
 
 ## Install
 
-Two channels. The **Native AOT binary is the recommended one** — self-contained, nothing to
-install, roughly ten milliseconds to start. The
-[NuGet package](https://www.nuget.org/packages/mcp-sonarqube) is the convenience one: no download
-step, at the cost of needing the .NET 10 SDK and a JIT startup.
+Two channels, one binary. The **archive from GitHub Releases** is the fastest to start — a
+self-contained Native AOT executable, nothing to install. The
+[NuGet package](https://www.nuget.org/packages/mcp-sonarqube) delivers the same native binary
+through `dnx`, with no download step; it needs the .NET 10 SDK for `dnx` itself, which adds a few
+hundred milliseconds of package resolution to every start.
 
 ### Native AOT binary (recommended)
 
@@ -78,7 +79,7 @@ named `sonarqube-mcp-{version}-{rid}` and contains the executable, `LICENSE` and
 | macOS Apple silicon | `osx-arm64` | `sonarqube-mcp-{version}-osx-arm64.tar.gz` |
 
 ```bash
-tar -xzf sonarqube-mcp-1.2.0-linux-x64.tar.gz
+tar -xzf sonarqube-mcp-1.3.0-linux-x64.tar.gz
 chmod +x sonarqube-mcp
 ./sonarqube-mcp --version
 ```
@@ -98,7 +99,10 @@ sonarqube-mcp status     Show the resolved configuration and probe the credentia
 
 The same server is published to nuget.org as
 [`mcp-sonarqube`](https://www.nuget.org/packages/mcp-sonarqube), a .NET tool package carrying the
-`McpServer` package type. The package id is `mcp-sonarqube` rather than `sonarqube-mcp` because
+`McpServer` package type. It names one package per platform — `mcp-sonarqube.win-x64`,
+`.win-arm64`, `.linux-x64`, `.linux-arm64` and `.osx-arm64`, each holding the Native AOT binary
+from the matching release archive — and `mcp-sonarqube.any`, a framework-dependent build for every
+other platform; `dnx` fetches the right one by itself. The package id is `mcp-sonarqube` rather than `sonarqube-mcp` because
 SonarSource holds both the `SonarQube*` and the `SonarCloud*` reserved package-id prefixes on
 nuget.org; nothing else is renamed, and the command the package installs is still `sonarqube-mcp`.
 `dnx` — part of the .NET 10 SDK —
@@ -106,7 +110,7 @@ downloads and runs it in one step, so there is nothing to install and nothing to
 hand:
 
 ```bash
-dnx mcp-sonarqube@1.2.0 --yes status
+dnx mcp-sonarqube@1.3.0 --yes status
 ```
 
 `--yes` accepts the download prompt and is consumed by `dnx` itself; everything after it is passed
@@ -119,7 +123,7 @@ speaks MCP over stdio, which is how a client should launch it:
     "sonarqube": {
       "type": "stdio",
       "command": "dnx",
-      "args": ["mcp-sonarqube@1.2.0", "--yes"],
+      "args": ["mcp-sonarqube@1.3.0", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "...",
         "SONARQUBE_ORG": "my-org"
@@ -129,15 +133,18 @@ speaks MCP over stdio, which is how a client should launch it:
 }
 ```
 
-Pin the version (`@1.2.0`) rather than floating: an MCP server is something an agent runs on your
-behalf, and a pinned version is one you decided to run. This half is framework-dependent, so it
-needs the .NET 10 SDK — if a client reports *the command "dnx" was not found*, that is what is
-missing.
+Pin the version (`@1.3.0`) rather than floating: an MCP server is something an agent runs on your
+behalf, and a pinned version is one you decided to run. `dnx` is part of the .NET 10 SDK — if a
+client reports *the command "dnx" was not found*, that is what is missing. The server itself needs
+no .NET runtime on the five platforms above; only the `any` fallback runs on the SDK's runtime.
 
 Releases are pushed to nuget.org by `.github/workflows/publish.yml`, a workflow only a `v*.*.*` tag
 can start, using [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing):
 the workflow exchanges its GitHub OIDC token for an API key that lives minutes. There is no NuGet
-API key stored in this repository, so there is none to leak.
+API key stored in this repository, so there is none to leak. The five native packages are built
+and handshake-tested by the release legs that build the archives, and pushed ahead of the
+`mcp-sonarqube` package that names them. The same workflow then lists the release in the
+[MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.lahma/sonarqube-mcp`.
 
 ## Authentication
 
@@ -373,7 +380,7 @@ Two more passes worth knowing, both described in full in the shipped skill:
 
 ```
 $ sonarqube-mcp status
-sonarqube-mcp 1.2.0
+sonarqube-mcp 1.3.0
 
 Configuration
   Base URL:          https://sonarcloud.io
