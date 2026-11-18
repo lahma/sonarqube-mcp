@@ -41,8 +41,6 @@ namespace SonarQube.Mcp.Tests;
 /// </remarks>
 public class AgentSkillTests
 {
-    /// <summary>The file that identifies the repository root when walking up from the test assembly.</summary>
-    private const string RootMarker = "sonarqube-mcp.slnx";
 
     /// <summary>
     /// The canonical skill location. <c>.claude/skills/</c> is what Claude Code loads as a project
@@ -191,20 +189,8 @@ public class AgentSkillTests
 
     private static string SkillFile()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, RootMarker)))
-            {
-                var file = Path.Combine(directory.FullName, SkillDirectory, "SKILL.md");
-                Assert.That(File.Exists(file), Is.True, $"The shipped skill is missing: {SkillDirectory}/SKILL.md.");
-                return file;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException($"Could not find {RootMarker} above {AppContext.BaseDirectory}.");
+        var file = Path.Combine(RepositoryRoot.FullPath, SkillDirectory, "SKILL.md");
+        Assert.That(File.Exists(file), Is.True, $"The shipped skill is missing: {SkillDirectory}/SKILL.md.");
+        return file;
     }
 }
