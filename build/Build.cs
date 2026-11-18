@@ -28,10 +28,11 @@ using Project = Fallout.Solutions.Project;
 /// The Fallout orchestrator for sonarqube-mcp.
 /// </summary>
 /// <remarks>
-/// Restore / Compile / Test come from the Fallout.Components interfaces; only the two things
-/// that are specific to shipping a Native AOT MCP server are hand-written: <c>PublishAot</c>
-/// (publish + archive per RID) and <c>SmokeTest</c> (a real stdio JSON-RPC handshake against
-/// the published binary).
+/// Restore and Compile come from the Fallout.Components interfaces. Three targets are hand-written:
+/// <c>Test</c>, because the suite runs on Microsoft.Testing.Platform and Fallout's <c>ITest</c>
+/// speaks VSTest only, and the two things specific to shipping a Native AOT MCP server -
+/// <c>PublishAot</c> (publish + archive per RID) and <c>SmokeTest</c> (a real stdio JSON-RPC
+/// handshake against the published binary).
 /// </remarks>
 [ShutdownDotNetAfterServerBuild]
 partial class Build : FalloutBuild,
@@ -42,10 +43,9 @@ partial class Build : FalloutBuild,
     IHasGitRepository,
     IRestore,
     ICompile,
-    ITest,
     ICreateGitHubRelease
 {
-    public static int Main() => Execute<Build>(x => ((ITest)x).Test);
+    public static int Main() => Execute<Build>(x => x.Test);
 
     /// <summary>The binary's product name; also the MCP <c>serverInfo.name</c> asserted by SmokeTest.</summary>
     const string ProductName = "sonarqube-mcp";
@@ -101,6 +101,17 @@ partial class Build : FalloutBuild,
         "bulkUpdateIssues",
     ];
 
+    /// <summary>
+    /// R3: the newest glibc a Linux binary may need - and so the oldest Linux it starts on (glibc 2.34:
+    /// Ubuntu 22.04, Debian 12, RHEL 9). Read off the v1.1.1 release binaries, both architectures.
+    /// </summary>
+    /// <remarks>
+    /// The floor follows the image the binary is built on, not anything in this repository, so
+    /// <see cref="AssertGlibcFloor"/> fails a publish that needs more. Raise it only on purpose, together
+    /// with README.md's requirement.
+    /// </remarks>
+    static readonly Version MaxGlibc = new(2, 34);
+
     /// <summary>How long SmokeTest waits for both JSON-RPC responses before giving up.</summary>
     static readonly TimeSpan SmokeTestTimeout = TimeSpan.FromSeconds(30);
 
@@ -116,6 +127,7 @@ partial class Build : FalloutBuild,
     AbsolutePath TestsDirectory => RootDirectory / "tests";
     // Spelled out rather than derived from ProductName: on Linux the path is case-sensitive.
     AbsolutePath ServerProject => SourceDirectory / "SonarQube.Mcp" / "SonarQube.Mcp.csproj";
+    AbsolutePath TestProject => TestsDirectory / "SonarQube.Mcp.Tests" / "SonarQube.Mcp.Tests.csproj";
     AbsolutePath ChangelogPath => RootDirectory / "CHANGELOG.md";
     AbsolutePath PublishDirectory => ArtifactsDirectory / "publish" / Runtime;
     AbsolutePath StagingDirectory => ArtifactsDirectory / "staging" / Runtime;
@@ -123,6 +135,7 @@ partial class Build : FalloutBuild,
     AbsolutePath ReleaseNotesFile => ArtifactsDirectory / "release-notes.md";
 
     bool IsWindowsRuntime => Runtime.StartsWith("win", StringComparison.OrdinalIgnoreCase);
+    bool IsLinuxRuntime => Runtime.StartsWith("linux", StringComparison.OrdinalIgnoreCase);
     string ExecutableName => IsWindowsRuntime ? ProductName + ".exe" : ProductName;
     string ArchiveExtension => IsWindowsRuntime ? ".zip" : ".tar.gz";
     AbsolutePath PublishedExecutable => PublishDirectory / ExecutableName;
@@ -191,13 +204,25 @@ partial class Build : FalloutBuild,
             ArtifactsDirectory.CreateOrCleanDirectory();
         });
 
-    IEnumerable<Project> ITest.TestProjects => Solution.GetAllProjects("*.Tests");
-
     Configure<DotNetBuildSettings> ICompile.CompileSettings => _ => _
         .SetProperty("Version", Version);
 
-    Configure<DotNetTestSettings> ITest.TestSettings => _ => _
-        .SetProperty("Version", Version);
+    /// <summary>Runs the NUnit suite on Microsoft.Testing.Platform (D11).</summary>
+    /// <remarks>
+    /// Hand-written rather than Fallout's <c>ITest</c>, which drives VSTest only
+    /// (Fallout-build/Fallout#674): it passes the project positionally and adds <c>--logger trx</c>,
+    /// and <c>dotnet test</c> in MTP mode (<c>global.json</c>'s <c>test.runner</c>) rejects both.
+    /// <c>--no-build</c> reuses what Compile built, so the configuration has to be Compile's. A
+    /// failing test exits 2 and a run that finds no test at all exits 8; either fails the target.
+    /// </remarks>
+    Target Test => _ => _
+        .Description("Runs the NUnit suite on Microsoft.Testing.Platform")
+        .DependsOn<ICompile>(x => x.Compile)
+        .Executes(() =>
+        {
+            var configuration = ((IHasConfiguration)this).Configuration;
+            DotNet($"test --project {TestProject} --configuration {configuration} --no-build --no-progress");
+        });
 
     Target PublishAot => _ => _
         .Description("Publishes a Native AOT binary for --runtime and archives it into artifacts/archives")
@@ -219,6 +244,8 @@ partial class Build : FalloutBuild,
 
             Assert.True(PublishedExecutable.FileExists(),
                 $"Native AOT publish did not produce '{PublishedExecutable}'");
+
+            var glibc = IsLinuxRuntime ? AssertGlibcFloor() : null;
 
             // Archive exactly the three files a user needs, not the whole publish directory.
             StagingDirectory.CreateOrCleanDirectory();
@@ -251,8 +278,33 @@ partial class Build : FalloutBuild,
             Log.Information("Created {Archive}", ArchiveFile);
             ReportSummary(_ => _
                 .AddPair("Runtime", Runtime)
-                .AddPair("Archive", ArchiveFile.Name));
+                .AddPair("Archive", ArchiveFile.Name)
+                .AddPairWhenValueNotNull("Needs glibc", glibc));
         });
+
+    /// <summary>
+    /// R3: fails when the published Linux binary needs a newer glibc than <see cref="MaxGlibc"/>, and
+    /// returns the version it does need.
+    /// </summary>
+    string AssertGlibcFloor()
+    {
+        var needed = GlibcRequirements.Read(PublishedExecutable);
+        if (needed.Count == 0)
+        {
+            Log.Information("{Executable} names no glibc version", PublishedExecutable);
+            return null;
+        }
+
+        var highest = needed[^1];
+        Assert.True(highest <= MaxGlibc,
+            $"'{PublishedExecutable}' needs GLIBC_{highest}, newer than the recorded floor GLIBC_{MaxGlibc}, so it " +
+            "would no longer start on every Linux README.md promises. The build image has most likely moved: build " +
+            "on the older one, or raise MaxGlibc in build/Build.cs and the README's requirement on purpose.");
+
+        Log.Information("{Executable} needs glibc {Highest} or newer (floor {Floor})",
+            PublishedExecutable, highest, MaxGlibc);
+        return highest.ToString();
+    }
 
     Target SmokeTest => _ => _
         .Description("Runs a real stdio JSON-RPC handshake against the published AOT binary, in both modes")

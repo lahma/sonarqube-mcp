@@ -6,19 +6,21 @@ using Fallout.Components;
 //
 // One Linux job. FetchDepth = 0 because the changelog-driven version and GitRepository want the
 // full history. SmokeTest implies PublishAot, so CI publishes a real linux-x64 Native AOT binary
-// and speaks JSON-RPC to it on every push and pull request.
+// and speaks JSON-RPC to it on every push and pull request. Ubuntu 24.04 by name, not ubuntu-latest:
+// it is the image release.yml's linux-x64 leg builds on, so the binary CI checks (including its
+// glibc floor, R3) is the one a release would ship.
 //
 // PublishArtifacts = false: the per-RID archives that PublishAot .Produces() belong to the
 // hand-written release workflow (the generator has no matrix support), not to the PR gate.
 [GitHubActions(
     "build",
-    GitHubActionsImage.UbuntuLatest,
+    GitHubActionsImage.Ubuntu2404,
     FetchDepth = 0,
     OnPushBranches = ["main"],
     OnPullRequestBranches = ["main"],
     ConcurrencyGroup = "${{ github.workflow }}-${{ github.ref }}",
     ConcurrencyCancelInProgress = true,
-    InvokedTargets = [nameof(ITest.Test), nameof(SmokeTest)],
+    InvokedTargets = [nameof(Test), nameof(SmokeTest)],
     PublishArtifacts = false)]
 // .github/workflows/publish.yml is generated from this second attribute (same hard rule 2 - never
 // hand-edit the YAML).
@@ -37,7 +39,7 @@ using Fallout.Components;
     FetchDepth = 0,
     OnPushTags = ["v*.*.*"],
     CacheKeyFiles = [],
-    InvokedTargets = [nameof(ICompile.Compile), nameof(ITest.Test), nameof(Pack), nameof(Publish)],
+    InvokedTargets = [nameof(ICompile.Compile), nameof(Test), nameof(Pack), nameof(Publish)],
     PublishArtifacts = true,
     // The nuget.org profile name that created the trusted publishing policy. Public information and
     // deliberately not a secret - it goes verbatim into the token-exchange request body, and a

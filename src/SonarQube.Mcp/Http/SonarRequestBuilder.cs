@@ -99,6 +99,26 @@ internal sealed class SonarRequestBuilder
         value is null ? this : Query(name, value.GetValueOrDefault() ? "true" : "false");
 
     /// <summary>
+    /// Appends <c>name=value</c> once <b>per value</b> — the repeated form, which exactly one parameter
+    /// this server sends needs: <c>issues/search</c>'s <c>author</c>.
+    /// </summary>
+    /// <remarks>
+    /// Its catalogue entry says so ("the parameter must be called once for each value"), and the
+    /// comma form is not merely ignored there but read as one literal author: verified 2026-11-18,
+    /// two authors with 44 and 2 issues answered 46 repeated and 0 comma-joined. Every other list
+    /// goes through <see cref="QueryList"/>. Blank entries are dropped.
+    /// </remarks>
+    internal SonarRequestBuilder QueryEach(string name, IReadOnlyList<string>? values)
+    {
+        foreach (var value in values ?? [])
+        {
+            Query(name, value?.Trim());
+        }
+
+        return this;
+    }
+
+    /// <summary>
     /// Appends a list parameter as a single <b>comma-joined</b> value —
     /// <c>issueStatuses=OPEN,CONFIRMED</c>, which is what SonarQube's multi-value parameters take.
     /// This is the exact inverse of the template's repeated-parameter form, and getting it wrong is

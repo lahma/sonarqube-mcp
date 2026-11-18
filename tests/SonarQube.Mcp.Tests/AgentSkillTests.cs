@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 
-using SonarQube.Mcp.Tests.Tools;
+using NUnit.Framework;
 
-using Xunit;
+using SonarQube.Mcp.Tests.Tools;
 
 namespace SonarQube.Mcp.Tests;
 
@@ -60,19 +60,20 @@ public class AgentSkillTests
     /// <summary>The Agent Skills spec's <c>name</c> rule: lowercase alphanumerics, single hyphens.</summary>
     private static readonly Regex SkillName = new("^[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.Compiled);
 
-    [Fact]
+    [Test]
     public void EveryToolTheSkillNamesExists()
     {
         var toolNames = ToolNames();
         var unknown = ReferencedToolNames().Where(name => !toolNames.Contains(name)).ToList();
 
-        Assert.True(
+        Assert.That(
             unknown.Count == 0,
+            Is.True,
             $"{SkillDirectory}/SKILL.md names tools this server does not have: {string.Join(", ", unknown)}. "
             + "Rename them, or drop the guidance that used them.");
     }
 
-    [Fact]
+    [Test]
     public void EveryToolIsNamedInTheSkill()
     {
         var referenced = ReferencedToolNames();
@@ -82,8 +83,9 @@ public class AgentSkillTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.True(
+        Assert.That(
             missing.Count == 0,
+            Is.True,
             $"{SkillDirectory}/SKILL.md never mentions {string.Join(", ", missing)}. A tool the skill leaves out "
             + "is a tool the workflow it teaches silently drops — place it in a playbook, in backticks.");
     }
@@ -94,27 +96,28 @@ public class AgentSkillTests
     /// the directory name: clients that take the command from the directory and clients that take it
     /// from the field would otherwise disagree about what this skill is called.
     /// </summary>
-    [Fact]
+    [Test]
     public void FrontmatterFollowsTheAgentSkillsSpec()
     {
         var lines = File.ReadAllLines(SkillFile());
 
-        Assert.Equal("---", lines[0]);
+        Assert.That(lines[0], Is.EqualTo("---"));
 
         var end = Array.IndexOf(lines, "---", 1);
-        Assert.True(end > 0, "SKILL.md has no closing frontmatter delimiter.");
+        Assert.That(end > 0, Is.True, "SKILL.md has no closing frontmatter delimiter.");
 
         var frontmatter = lines[1..end];
 
         var name = Value(frontmatter, "name");
-        Assert.Equal(SkillDirectory[(SkillDirectory.LastIndexOf('/') + 1)..], name);
-        Assert.Matches(SkillName, name);
-        Assert.True(name.Length <= 64, $"name is {name.Length} characters; the spec allows 64.");
+        Assert.That(name, Is.EqualTo(SkillDirectory[(SkillDirectory.LastIndexOf('/') + 1)..]));
+        Assert.That(name, Does.Match(SkillName));
+        Assert.That(name.Length <= 64, Is.True, $"name is {name.Length} characters; the spec allows 64.");
 
         var description = Value(frontmatter, "description");
-        Assert.False(string.IsNullOrWhiteSpace(description), "description is required and drives invocation.");
-        Assert.True(
+        Assert.That(string.IsNullOrWhiteSpace(description), Is.False, "description is required and drives invocation.");
+        Assert.That(
             description.Length <= 1024,
+            Is.True,
             $"description is {description.Length} characters; the spec allows 1024.");
     }
 
@@ -126,7 +129,7 @@ public class AgentSkillTests
             .ToHashSet(StringComparer.Ordinal);
 
         // Self-check: an empty inventory would make both directions of the cross-check vacuous.
-        Assert.NotEmpty(names);
+        Assert.That(names, Is.Not.Empty);
 
         return names;
     }
@@ -143,7 +146,7 @@ public class AgentSkillTests
 
         // Self-check: the verb set is derived from the names it is used to recognise, so an empty
         // one would make the whole scan match nothing and pass.
-        Assert.NotEmpty(verbs);
+        Assert.That(verbs, Is.Not.Empty);
 
         var parameters = ToolTestHost.ToolMethods
             .SelectMany(method => method.GetParameters())
@@ -164,7 +167,7 @@ public class AgentSkillTests
         }
 
         // Self-check: a scan that finds nothing is broken, not reassuring.
-        Assert.True(referenced.Count > 0, $"Found no tool references at all in {SkillDirectory}/SKILL.md.");
+        Assert.That(referenced.Count > 0, Is.True, $"Found no tool references at all in {SkillDirectory}/SKILL.md.");
 
         return referenced;
     }
@@ -173,7 +176,7 @@ public class AgentSkillTests
     private static string Value(string[] frontmatter, string key)
     {
         var index = Array.FindIndex(frontmatter, line => line.StartsWith(key + ":", StringComparison.Ordinal));
-        Assert.True(index >= 0, $"SKILL.md frontmatter has no '{key}' key.");
+        Assert.That(index >= 0, Is.True, $"SKILL.md frontmatter has no '{key}' key.");
 
         var head = frontmatter[index][(key.Length + 1)..].Trim();
         List<string> folded = head is ">-" or ">" or "|" or "|-" ? [] : [head];
@@ -195,7 +198,7 @@ public class AgentSkillTests
             if (File.Exists(Path.Combine(directory.FullName, RootMarker)))
             {
                 var file = Path.Combine(directory.FullName, SkillDirectory, "SKILL.md");
-                Assert.True(File.Exists(file), $"The shipped skill is missing: {SkillDirectory}/SKILL.md.");
+                Assert.That(File.Exists(file), Is.True, $"The shipped skill is missing: {SkillDirectory}/SKILL.md.");
                 return file;
             }
 

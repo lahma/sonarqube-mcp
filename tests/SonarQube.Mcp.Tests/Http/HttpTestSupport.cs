@@ -2,11 +2,11 @@ using System.Text;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
+using NUnit.Framework;
+
 using SonarQube.Mcp.Authentication;
 using SonarQube.Mcp.Configuration;
 using SonarQube.Mcp.Http;
-
-using Xunit;
 
 namespace SonarQube.Mcp.Tests.Http;
 
@@ -229,7 +229,7 @@ internal static class RequestUrl
         {
             if (string.Equals(parameter.Key, name, StringComparison.Ordinal))
             {
-                Assert.Null(found);
+                Assert.That(found, Is.Null);
                 found = parameter.Value;
             }
         }

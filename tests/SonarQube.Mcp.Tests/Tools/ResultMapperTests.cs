@@ -1,10 +1,11 @@
 using System.Text.Json;
 
+using NUnit.Framework;
+
 using SonarQube.Mcp.Http.Models;
 using SonarQube.Mcp.Tests.Http;
 using SonarQube.Mcp.Tools;
-
-using Xunit;
+using SonarQube.Mcp.Tools.Models;
 
 namespace SonarQube.Mcp.Tests.Tools;
 
@@ -28,26 +29,49 @@ public class ResultMapperTests
     /// The single biggest context saving in the tool layer, asserted over a whole live page: every
     /// issue gets a path, and no path is a component key in disguise.
     /// </summary>
-    [Fact]
+    [Test]
     public void EveryIssueOnALivePageGetsItsPathFromTheSidecar()
     {
         var response = Issues("issues-search-page.json");
 
         var result = ResultMapper.Issues(response, default, 1, 2, BaseUrl);
 
-        Assert.NotEmpty(result.Issues);
-        Assert.All(result.Issues, issue => Assert.False(string.IsNullOrEmpty(issue.File)));
-        Assert.All(result.Issues, issue => Assert.DoesNotContain(':', issue.File!));
+        Assert.That(result.Issues, Is.Not.Empty);
+
+        foreach (var issue in result.Issues)
+        {
+            Assert.That(string.IsNullOrEmpty(issue.File), Is.False);
+            Assert.That(issue.File!, Does.Not.Contain(':'));
+        }
 
         // The key is still there when the caller needs one back.
-        Assert.All(result.Issues, issue => Assert.Contains(':', issue.Component!));
+        foreach (var issue in result.Issues)
+        {
+            Assert.That(issue.Component!, Does.Contain(':'));
+        }
+    }
+
+    /// <summary>
+    /// The SCM author reaches the single-issue result; an anonymous response has none, so it comes
+    /// from the DTO rather than from a fixture.
+    /// </summary>
+    [Test]
+    public void AnIssuesScmAuthorIsReportedOnTheDetailNotAsTheAssignee()
+    {
+        var issue = new IssueDto { Key = "k", Author = "ada@example.com", Assignee = "bob@github" };
+
+        var detail = ResultMapper.Detail(
+            issue, new Dictionary<string, string>(), new Dictionary<string, string>(), default, BaseUrl);
+
+        Assert.That(detail.Author, Is.EqualTo("ada@example.com"));
+        Assert.That(detail.Assignee, Is.EqualTo("bob@github"));
     }
 
     /// <summary>
     /// The sidecar is SonarQube's, not ours. A response that listed the same component twice would
     /// take down a whole issue search over a detail no caller can see.
     /// </summary>
-    [Fact]
+    [Test]
     public void ADuplicateComponentKeyInTheSidecarDoesNotThrow()
     {
         var response = JsonSerializer.Deserialize(
@@ -56,39 +80,39 @@ public class ResultMapperTests
 
         var result = ResultMapper.Issues(response, default, 1, 2, BaseUrl);
 
-        Assert.Equal(2, result.Issues.Count);
-        Assert.Equal("src/Quartz/Widget.cs", result.Issues[0].File);
+        Assert.That(result.Issues.Count, Is.EqualTo(2));
+        Assert.That(result.Issues[0].File, Is.EqualTo("src/Quartz/Widget.cs"));
 
         // The second issue's component is not in the sidecar at all, so it falls back.
-        Assert.Equal("src/Quartz/Other.cs", result.Issues[1].File);
+        Assert.That(result.Issues[1].File, Is.EqualTo("src/Quartz/Other.cs"));
     }
 
     /// <summary>
     /// With no sidecar the path is the substring after the first colon, which is what a component
     /// key is made of — right for every file component.
     /// </summary>
-    [Fact]
+    [Test]
     public void WithNoSidecarThePathIsTheSubstringAfterTheFirstColon()
     {
-        Assert.Equal(
-            "src/Quartz/Core/QuartzScheduler.cs",
-            ComponentKeys.PathFor(FileKey, ComponentKeys.NoComponents));
+        Assert.That(
+            ComponentKeys.PathFor(FileKey, ComponentKeys.NoComponents),
+            Is.EqualTo("src/Quartz/Core/QuartzScheduler.cs"));
     }
 
     /// <summary>A project component's key has no path part, so the key itself is the honest answer.</summary>
-    [Fact]
+    [Test]
     public void AKeyWithNoPathPartResolvesToItself()
     {
-        Assert.Equal(Project, ComponentKeys.PathFor(Project, ComponentKeys.NoComponents));
-        Assert.Equal("proj:", ComponentKeys.PathFor("proj:", ComponentKeys.NoComponents));
-        Assert.Equal(string.Empty, ComponentKeys.PathFor(null, ComponentKeys.NoComponents));
+        Assert.That(ComponentKeys.PathFor(Project, ComponentKeys.NoComponents), Is.EqualTo(Project));
+        Assert.That(ComponentKeys.PathFor("proj:", ComponentKeys.NoComponents), Is.EqualTo("proj:"));
+        Assert.That(ComponentKeys.PathFor(null, ComponentKeys.NoComponents), Is.EqualTo(string.Empty));
     }
 
     /// <summary>
     /// A project entry in the sidecar has no <c>path</c>; falling back to its name is what keeps a
     /// project-level issue from reporting an empty file.
     /// </summary>
-    [Fact]
+    [Test]
     public void AComponentWithNoPathFallsBackToItsLongNameThenItsName()
     {
         var map = ComponentKeys.BuildPathMap(
@@ -99,17 +123,17 @@ public class ResultMapperTests
             new ComponentDto { Path = "orphan/without/a/key.cs" },
         ]);
 
-        Assert.Equal("the/long/name", map["a"]);
-        Assert.Equal("the-name", map["b"]);
-        Assert.False(map.ContainsKey("c"));
-        Assert.Equal(2, map.Count);
+        Assert.That(map["a"], Is.EqualTo("the/long/name"));
+        Assert.That(map["b"], Is.EqualTo("the-name"));
+        Assert.That(map.ContainsKey("c"), Is.False);
+        Assert.That(map.Count, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public void AnAbsentSidecarProducesTheSharedEmptyMap()
     {
-        Assert.Same(ComponentKeys.NoComponents, ComponentKeys.BuildPathMap(null));
-        Assert.Same(ComponentKeys.NoComponents, ComponentKeys.BuildPathMap([]));
+        Assert.That(ComponentKeys.BuildPathMap(null), Is.SameAs(ComponentKeys.NoComponents));
+        Assert.That(ComponentKeys.BuildPathMap([]), Is.SameAs(ComponentKeys.NoComponents));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -120,60 +144,60 @@ public class ResultMapperTests
     /// SonarQube returns no web URL for anything, so every link is composed — and a link that
     /// forgets the scope opens the main branch, where the issue being linked to may not exist.
     /// </summary>
-    [Fact]
+    [Test]
     public void AnIssueLinkCarriesTheBranchTheSearchWasScopedTo()
     {
         var response = Issues("issues-search-single.json");
 
         var result = ResultMapper.Issues(response, new AnalysisScope("release/4.0", null), 1, 1, BaseUrl);
 
-        Assert.Equal(
-            "https://sonarcloud.io/project/issues?id=quartznet_quartznet" +
-            "&issues=AZ_xePOumT_q4T_1FWf8&open=AZ_xePOumT_q4T_1FWf8&branch=release%2F4.0",
-            result.Issues[0].Url);
+        Assert.That(
+            result.Issues[0].Url,
+            Is.EqualTo("https://sonarcloud.io/project/issues?id=quartznet_quartznet" +
+            "&issues=AZ_xePOumT_q4T_1FWf8&open=AZ_xePOumT_q4T_1FWf8&branch=release%2F4.0"));
     }
 
-    [Fact]
+    [Test]
     public void AnIssueLinkCarriesThePullRequestInstead()
     {
         var response = Issues("issues-search-single.json");
 
         var result = ResultMapper.Issues(response, new AnalysisScope(null, "3266"), 1, 1, BaseUrl);
 
-        Assert.EndsWith("&pullRequest=3266", result.Issues[0].Url!, StringComparison.Ordinal);
-        Assert.DoesNotContain("branch=", result.Issues[0].Url!, StringComparison.Ordinal);
+        Assert.That(result.Issues[0].Url!, Does.EndWith("&pullRequest=3266").Using(StringComparison.Ordinal));
+        Assert.That(result.Issues[0].Url!, !Contains.Substring("branch=").Using(StringComparison.Ordinal));
     }
 
     /// <summary>A component key carries a colon and slashes, none of which may travel raw.</summary>
-    [Fact]
+    [Test]
     public void ComponentKeysAreEscapedExactlyOnceInALink()
     {
         var url = ComponentKeys.ComponentUrl(BaseUrl, Project, FileKey, default);
 
-        Assert.Equal(
-            "https://sonarcloud.io/code?id=quartznet_quartznet" +
-            "&selected=quartznet_quartznet%3Asrc%2FQuartz%2FCore%2FQuartzScheduler.cs",
-            url);
+        Assert.That(
+            url,
+            Is.EqualTo("https://sonarcloud.io/code?id=quartznet_quartznet" +
+            "&selected=quartznet_quartznet%3Asrc%2FQuartz%2FCore%2FQuartzScheduler.cs"));
     }
 
-    [Fact]
+    [Test]
     public void AHotspotLinkNamesTheProjectAndTheHotspot()
     {
-        Assert.Equal(
-            "https://sonarcloud.io/security_hotspots?id=quartznet_quartznet&hotspots=AZvu8Zyf&pullRequest=3266",
-            ComponentKeys.HotspotUrl(BaseUrl, Project, "AZvu8Zyf", new AnalysisScope(null, "3266")));
+        Assert.That(
+            ComponentKeys.HotspotUrl(BaseUrl, Project, "AZvu8Zyf", new AnalysisScope(null, "3266")),
+            Is.EqualTo("https://sonarcloud.io/security_hotspots?id=quartznet_quartznet&hotspots=AZvu8Zyf&pullRequest=3266"));
     }
 
-    [Fact]
+    [Test]
     public void ALinkToNothingInParticularIsStillAValidProjectLink()
     {
-        Assert.Equal(
-            "https://sonarcloud.io/project/issues?id=quartznet_quartznet",
-            ComponentKeys.IssueUrl(BaseUrl, Project, null, default));
+        Assert.That(
+            ComponentKeys.IssueUrl(BaseUrl, Project, null, default),
+            Is.EqualTo("https://sonarcloud.io/project/issues?id=quartznet_quartznet"));
 
-        Assert.Equal(
-            "https://sonarcloud.io/code?id=quartznet_quartznet",
-            ComponentKeys.ComponentUrl(BaseUrl, Project, null, default));
+        Assert.That(
+            ComponentKeys.ComponentUrl(BaseUrl, Project, null, default),
+            Is.EqualTo("https://sonarcloud.io/code?id=quartznet_quartznet"));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -184,7 +208,7 @@ public class ResultMapperTests
     /// C7: the search endpoint's <c>assignee</c> is an internal UUID and the show endpoint's is a
     /// login. Same name, different meaning — so the result records must not share one.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheSearchEndpointsAssigneeIsAUuidAndTheShowEndpointsIsALogin()
     {
         var search = JsonSerializer.Deserialize(
@@ -198,11 +222,11 @@ public class ResultMapperTests
         var summary = ResultMapper.Hotspots(search, Project, default, 1, 2, BaseUrl).Hotspots[0];
         var detail = ResultMapper.Hotspot(show, BaseUrl);
 
-        Assert.Equal("AYgE5F7pEoXHSow6lKjD", summary.AssigneeId);
-        Assert.Equal("lahma@github", detail.Assignee);
+        Assert.That(summary.AssigneeId, Is.EqualTo("AYgE5F7pEoXHSow6lKjD"));
+        Assert.That(detail.Assignee, Is.EqualTo("lahma@github"));
 
         // The same hotspot, so the difference is the endpoint's and not the entity's.
-        Assert.Equal(summary.Key, detail.Key);
+        Assert.That(detail.Key, Is.EqualTo(summary.Key));
     }
 
     /// <summary>
@@ -210,7 +234,7 @@ public class ResultMapperTests
     /// <see langword="null"/> with no error, which is the worst possible failure mode — so the
     /// payload below carries both and only the singular one may be read.
     /// </summary>
-    [Fact]
+    [Test]
     public void HotspotReviewCommentsAreReadFromTheSingularProperty()
     {
         var show = JsonSerializer.Deserialize(
@@ -219,18 +243,19 @@ public class ResultMapperTests
 
         var detail = ResultMapper.Hotspot(show, BaseUrl);
 
-        var comment = Assert.Single(detail.Comments);
+        Assert.That(detail.Comments, Has.Exactly(1).Items);
+        var comment = detail.Comments.Single();
 
-        Assert.Equal("AaAoPgsRCRl6zX9b36TK", comment.Key);
-        Assert.Equal("sonarqube-mcp verification - restored to original state", comment.Text);
-        Assert.Equal("lahma@github", comment.Author);
+        Assert.That(comment.Key, Is.EqualTo("AaAoPgsRCRl6zX9b36TK"));
+        Assert.That(comment.Text, Is.EqualTo("sonarqube-mcp verification - restored to original state"));
+        Assert.That(comment.Author, Is.EqualTo("lahma@github"));
     }
 
     /// <summary>
     /// The other half of C8, which no capture can carry: SonarQube never sends the plural spelling,
     /// so the only way to prove it is not read is to send both and watch the plural be ignored.
     /// </summary>
-    [Fact]
+    [Test]
     public void APluralCommentsPropertyOnAHotspotIsIgnored()
     {
         var show = JsonSerializer.Deserialize(
@@ -239,8 +264,9 @@ public class ResultMapperTests
 
         var detail = ResultMapper.Hotspot(show, BaseUrl);
 
-        Assert.Equal("the singular property", Assert.Single(detail.Comments).Text);
-        Assert.DoesNotContain(detail.Comments, entry => entry.Key == "ignored");
+        Assert.That(detail.Comments, Has.Exactly(1).Items);
+        Assert.That(detail.Comments.Single().Text, Is.EqualTo("the singular property"));
+        Assert.That(detail.Comments, Has.None.Matches<HotspotComment>(entry => entry!.Key == "ignored"));
     }
 
     /// <summary>
@@ -249,7 +275,7 @@ public class ResultMapperTests
     /// an <c>oldValue</c> with no <c>newValue</c>. The first entry is SonarQube's own severity
     /// recalculation and has no user at all.
     /// </summary>
-    [Fact]
+    [Test]
     public void AHotspotsReviewHistoryIsMappedFieldByField()
     {
         var show = JsonSerializer.Deserialize(
@@ -259,34 +285,35 @@ public class ResultMapperTests
         var changelog = ResultMapper.Hotspot(show, BaseUrl).Changelog;
 
         var automatic = changelog[0];
-        Assert.Null(automatic.User);
-        Assert.Null(automatic.UserName);
-        Assert.Equal("severity", Assert.Single(automatic.Changes).Field);
+        Assert.That(automatic.User, Is.Null);
+        Assert.That(automatic.UserName, Is.Null);
+        Assert.That(automatic.Changes, Has.Exactly(1).Items);
+        Assert.That(automatic.Changes.Single().Field, Is.EqualTo("severity"));
 
         var review = changelog[1];
-        Assert.Equal("lahma@github", review.User);
-        Assert.Equal("Marko Lahma", review.UserName);
+        Assert.That(review.User, Is.EqualTo("lahma@github"));
+        Assert.That(review.UserName, Is.EqualTo("Marko Lahma"));
 
         var status = review.Changes.Single(change => change.Field == "status");
-        Assert.Equal("TO_REVIEW", status.OldValue);
-        Assert.Equal("REVIEWED", status.NewValue);
+        Assert.That(status.OldValue, Is.EqualTo("TO_REVIEW"));
+        Assert.That(status.NewValue, Is.EqualTo("REVIEWED"));
 
         // Set, so there is a newValue and nothing before it.
         var resolution = review.Changes.Single(change => change.Field == "resolution");
-        Assert.Null(resolution.OldValue);
-        Assert.Equal("SAFE", resolution.NewValue);
+        Assert.That(resolution.OldValue, Is.Null);
+        Assert.That(resolution.NewValue, Is.EqualTo("SAFE"));
 
         // Cleared, which is the mirror image: an oldValue and no newValue.
         var cleared = changelog[2].Changes.Single(change => change.Field == "resolution");
-        Assert.Equal("SAFE", cleared.OldValue);
-        Assert.Null(cleared.NewValue);
+        Assert.That(cleared.OldValue, Is.EqualTo("SAFE"));
+        Assert.That(cleared.NewValue, Is.Null);
     }
 
     /// <summary>
     /// <c>hotspots/show</c> returns <c>component</c> and <c>project</c> as objects rather than
     /// strings, so the file comes from the object's own path and the link from the project object.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheShowEndpointsObjectShapedComponentIsReadAsAPathAndALink()
     {
         var show = JsonSerializer.Deserialize(
@@ -295,17 +322,17 @@ public class ResultMapperTests
 
         var detail = ResultMapper.Hotspot(show, BaseUrl);
 
-        Assert.Equal("src/Quartz.Examples.AspNetCore/appsettings.json", detail.File);
-        Assert.Equal(
-            "https://sonarcloud.io/security_hotspots?id=quartznet_quartznet&hotspots=AZvu8ZyfNsnCVHe5poFs",
-            detail.Url);
+        Assert.That(detail.File, Is.EqualTo("src/Quartz.Examples.AspNetCore/appsettings.json"));
+        Assert.That(
+            detail.Url,
+            Is.EqualTo("https://sonarcloud.io/security_hotspots?id=quartznet_quartznet&hotspots=AZvu8ZyfNsnCVHe5poFs"));
     }
 
     // ---------------------------------------------------------------------------------------
     // Rule names, write results and the paging envelope
     // ---------------------------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void RuleNamesAreJoinedFromTheSidecarAndAbsentWhenItIsNot()
     {
         var withSidecar = Issues("issues-search-single.json");
@@ -316,19 +343,19 @@ public class ResultMapperTests
         var named = ResultMapper.Issues(withSidecar, default, 1, 1, BaseUrl).Issues[0];
         var unnamed = ResultMapper.Issues(withoutSidecar with { Rules = null }, default, 1, 2, BaseUrl).Issues[0];
 
-        Assert.Equal(
-            "Null-forgiving operators should not be used when nullable warnings are disabled",
-            named.RuleName);
+        Assert.That(
+            named.RuleName,
+            Is.EqualTo("Null-forgiving operators should not be used when nullable warnings are disabled"));
 
-        Assert.Null(unnamed.RuleName);
-        Assert.Equal("csharpsquid:S1192", unnamed.Rule);
+        Assert.That(unnamed.RuleName, Is.Null);
+        Assert.That(unnamed.Rule, Is.EqualTo("csharpsquid:S1192"));
     }
 
     /// <summary>
     /// The transitions the caller is told about are the ones read back after the change, not the
     /// ones the operation response happened to echo.
     /// </summary>
-    [Fact]
+    [Test]
     public void ATransitionResultPrefersTheTransitionsItWasHandedOverTheEchoedOnes()
     {
         var response = JsonSerializer.Deserialize(
@@ -338,24 +365,24 @@ public class ResultMapperTests
         var withReRead = ResultMapper.Transition(response, ["confirm"], BaseUrl);
         var withoutReRead = ResultMapper.Transition(response, availableTransitions: null, BaseUrl);
 
-        Assert.Equal(["confirm"], withReRead.AvailableTransitions);
-        Assert.Equal(["reopen"], withoutReRead.AvailableTransitions);
-        Assert.Equal("src/Quartz.HttpClient/QuartzHttpClientServiceCollectionExtensions.cs", withReRead.File);
+        Assert.That(withReRead.AvailableTransitions, Is.EqualTo<string[]>(["confirm"]));
+        Assert.That(withoutReRead.AvailableTransitions, Is.EqualTo<string[]>(["reopen"]));
+        Assert.That(withReRead.File, Is.EqualTo("src/Quartz.HttpClient/QuartzHttpClientServiceCollectionExtensions.cs"));
     }
 
     /// <summary>
     /// A comment response that carries no comments still reports the text that was posted: it is
     /// the one thing the caller knows for certain went through.
     /// </summary>
-    [Fact]
+    [Test]
     public void ACommentResultFallsBackToTheTextThatWasPosted()
     {
         var response = new IssueOperationResponseDto();
 
         var result = ResultMapper.Comment(response, "the posted text", BaseUrl);
 
-        Assert.Equal("the posted text", result.Text);
-        Assert.Null(result.CommentKey);
+        Assert.That(result.Text, Is.EqualTo("the posted text"));
+        Assert.That(result.CommentKey, Is.Null);
     }
 
     /// <summary>
@@ -363,7 +390,7 @@ public class ResultMapperTests
     /// the mapper has to pick. On the live capture — two comments, posted three seconds apart — the
     /// newest is the second.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheCommentReportedBackIsTheNewestOneOnTheIssue()
     {
         var response = JsonSerializer.Deserialize(
@@ -372,9 +399,9 @@ public class ResultMapperTests
 
         var result = ResultMapper.Comment(response, "ignored", BaseUrl);
 
-        Assert.Equal(2, response.Issue!.Comments!.Count);
-        Assert.Equal("AaAoPByOjn1jm7-NQYn-", result.CommentKey);
-        Assert.Equal("sonarqube-mcp wire capture 2 - removing shortly", result.Text);
+        Assert.That(response.Issue!.Comments!.Count, Is.EqualTo(2));
+        Assert.That(result.CommentKey, Is.EqualTo("AaAoPByOjn1jm7-NQYn-"));
+        Assert.That(result.Text, Is.EqualTo("sonarqube-mcp wire capture 2 - removing shortly"));
     }
 
     /// <summary>
@@ -382,7 +409,7 @@ public class ResultMapperTests
     /// which is exactly why this cannot be tested with a capture: the payload below is the same two
     /// comments listed the other way round, and the answer must not change.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheNewestCommentIsChosenByTimestampRatherThanByPosition()
     {
         var response = JsonSerializer.Deserialize(
@@ -401,23 +428,23 @@ public class ResultMapperTests
 
         var result = ResultMapper.Comment(response, "ignored", BaseUrl);
 
-        Assert.Equal("NEWER", result.CommentKey);
-        Assert.Equal("second", result.Text);
+        Assert.That(result.CommentKey, Is.EqualTo("NEWER"));
+        Assert.That(result.Text, Is.EqualTo("second"));
     }
 
     /// <summary>
     /// <c>hasMore</c> needs both halves: an empty page is the last one whatever the total says, and
     /// a total SonarQube did not report is not one this server may invent.
     /// </summary>
-    [Fact]
+    [Test]
     public void HasMoreIsFalseWhenThePageIsEmptyOrTheTotalIsUnknown()
     {
         var empty = Issues("issues-search-empty.json");
 
         var emptyResult = ResultMapper.Issues(empty, default, 1, 2, BaseUrl);
 
-        Assert.False(emptyResult.HasMore);
-        Assert.Equal(0, emptyResult.TotalCount);
+        Assert.That(emptyResult.HasMore, Is.False);
+        Assert.That(emptyResult.TotalCount, Is.EqualTo(0));
 
         var noTotal = JsonSerializer.Deserialize(
             """{"issues":[{"key":"K","component":"p:a.cs","project":"p"}]}""",
@@ -425,15 +452,15 @@ public class ResultMapperTests
 
         var noTotalResult = ResultMapper.Issues(noTotal, default, 1, 50, BaseUrl);
 
-        Assert.False(noTotalResult.HasMore);
-        Assert.Null(noTotalResult.TotalCount);
+        Assert.That(noTotalResult.HasMore, Is.False);
+        Assert.That(noTotalResult.TotalCount, Is.Null);
     }
 
     /// <summary>
     /// A result set at the API's hard ceiling carries the warning before the caller pages into it,
     /// because the failure it prevents is a 400 three pages later.
     /// </summary>
-    [Fact]
+    [Test]
     public void AResultSetAtTheWindowLimitCarriesTheWarning()
     {
         var response = JsonSerializer.Deserialize(
@@ -442,8 +469,8 @@ public class ResultMapperTests
 
         var result = ResultMapper.Issues(response, default, 1, 1, BaseUrl);
 
-        Assert.NotNull(result.Note);
-        Assert.Contains("only lets the first 10000 results be paged through", result.Note, StringComparison.Ordinal);
+        Assert.That(result.Note, Is.Not.Null);
+        Assert.That(result.Note, Contains.Substring("only lets the first 10000 results be paged through").Using(StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -457,7 +484,7 @@ public class ResultMapperTests
     /// the result entirely. Silent, and wrong in the direction that costs a test. The second line
     /// pins the other half: zero hits is uncovered whatever the conditions say, and uncovered only.
     /// </remarks>
-    [Fact]
+    [Test]
     public void ABranchLineWithNoCoveredConditionCountIsPartialRatherThanCovered()
     {
         var response = JsonSerializer.Deserialize(
@@ -473,11 +500,11 @@ public class ResultMapperTests
 
         var result = ResultMapper.Coverage(response, FileKey, Project, 10, 11, true, default, BaseUrl);
 
-        Assert.Equal([10], result.PartiallyCoveredLines);
-        Assert.Equal([11], result.UncoveredLines);
+        Assert.That(result.PartiallyCoveredLines, Is.EqualTo<int[]>([10]));
+        Assert.That(result.UncoveredLines, Is.EqualTo<int[]>([11]));
 
         // Both are worth a test, so both survive the onlyUncovered filter.
-        Assert.Equal([10, 11], result.Lines.Select(line => line.Line));
+        Assert.That(result.Lines.Select(line => line.Line), Is.EqualTo<int[]>([10, 11]));
     }
 
     private static IssuesSearchResponseDto Issues(string fixture) =>

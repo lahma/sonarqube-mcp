@@ -5,6 +5,7 @@ using ModelContextProtocol.Server;
 
 using SonarQube.Mcp.Configuration;
 using SonarQube.Mcp.Http;
+using SonarQube.Mcp.Http.Models;
 using SonarQube.Mcp.Tools.Models;
 
 namespace SonarQube.Mcp.Tools;
@@ -99,7 +100,7 @@ internal sealed class IssueWriteTools
             // one extra read is worth it: without them the caller has no way to know what it can do
             // next except by trying transitions and reading the failures.
             var transitions = response.Issue?.Transitions
-                ?? await ReadTransitionsAsync(client, key, cancellationToken).ConfigureAwait(false);
+                ?? await ReadTransitionsAsync(client, key, response.Issue, cancellationToken).ConfigureAwait(false);
 
             return ResultMapper.Transition(response, transitions, options.BaseUrlText);
         }).ConfigureAwait(false);
@@ -205,7 +206,8 @@ internal sealed class IssueWriteTools
         "security decision that a human normally makes, and it takes effect immediately for the whole " +
         "organization — read the hotspot with getHotspot first, and check its canChangeStatus, which is false " +
         "when the account may not do this. ACKNOWLEDGED is not accepted on SonarQube Cloud. Setting the same " +
-        "status twice changes nothing, but a comment is appended every time.")]
+        "status twice changes nothing, but a comment is appended every time. A hotspot SonarQube Cloud has " +
+        "already migrated into an issue (tag former-hotspot) is reviewed with transitionIssue instead.")]
     public static async Task<HotspotStatusResult> SetHotspotStatusAsync(
         SonarApiClient client,
         SonarQubeMcpOptions options,
@@ -244,13 +246,20 @@ internal sealed class IssueWriteTools
     }
 
     /// <summary>Re-reads an issue for the transitions that are legal from its new state.</summary>
+    /// <remarks>
+    /// The key alone is not enough: <c>issues=</c> is only honoured inside the scope
+    /// <c>componentKeys</c> names, and a key searched without it falls back to the main branch, where
+    /// a pull request's issue does not exist (C13). So the re-read names the project, branch and pull
+    /// request the operation response reported for the issue.
+    /// </remarks>
     private static async Task<IReadOnlyList<string>?> ReadTransitionsAsync(
         SonarApiClient client,
         string issueKey,
+        IssueDto? issue,
         CancellationToken cancellationToken)
     {
         var response = await client.SearchIssuesAsync(
-                componentKeys: null,
+                componentKeys: issue?.Project is { Length: > 0 } project ? [project] : null,
                 issues: [issueKey],
                 issueStatuses: null,
                 impactSeverities: null,
@@ -267,11 +276,11 @@ internal sealed class IssueWriteTools
                 additionalFields: TransitionFields,
                 facets: null,
                 facetMode: null,
-                branch: null,
-                pullRequest: null,
+                branch: issue?.Branch,
+                pullRequest: issue?.PullRequest,
                 page: null,
                 pageSize: 1,
-                cancellationToken)
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         return response.Issues is { Count: > 0 } issues ? issues[0].Transitions : null;

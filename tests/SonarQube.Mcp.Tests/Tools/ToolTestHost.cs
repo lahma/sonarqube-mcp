@@ -50,7 +50,7 @@ internal static class ToolTestHost
     /// </summary>
     /// <remarks>
     /// The SDK caches the reflected function descriptor for a method process-wide, so two test
-    /// classes building tools for the same methods at the same time — which xunit's parallelism
+    /// classes building tools for the same methods at the same time — which a parallel test run
     /// makes possible and the server itself never does — race on that cache. One lock and one shared
     /// options instance remove the only concurrency in play.
     /// </remarks>

@@ -184,41 +184,41 @@ internal static class ResultMapper
     /// <c>NONE</c>.
     /// </summary>
     internal static QualityGateResult QualityGate(
-        ProjectStatusResponseDto response,
+        QualityGateDetailsDto gate,
         string project,
         AnalysisScope scope,
         string baseUrl)
     {
-        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(gate);
 
-        var status = response.ProjectStatus;
-        var conditions = new List<QualityGateCondition>(status?.Conditions?.Count ?? 0);
+        var conditions = new List<QualityGateCondition>(gate.Conditions?.Count ?? 0);
         var failing = new List<QualityGateCondition>();
 
-        foreach (var condition in status?.Conditions ?? [])
+        foreach (var condition in gate.Conditions ?? [])
         {
             var mapped = new QualityGateCondition
             {
-                Metric = condition.MetricKey,
-                Status = condition.Status,
-                Comparator = condition.Comparator,
-                Threshold = MeasureFormatting.Format(condition.MetricKey, condition.ErrorThreshold),
-                ActualValue = MeasureFormatting.Format(condition.MetricKey, condition.ActualValue),
-                OnNewCode = condition.PeriodIndex == 1,
+                Metric = condition.Metric,
+                Status = condition.Level,
+                Comparator = condition.Op,
+                Threshold = MeasureFormatting.Format(condition.Metric, condition.Error),
+                ActualValue = MeasureFormatting.Format(condition.Metric, condition.Actual),
+                OnNewCode = condition.Period == 1,
             };
 
             conditions.Add(mapped);
 
-            if (string.Equals(condition.Status, "ERROR", StringComparison.Ordinal))
+            if (string.Equals(condition.Level, "ERROR", StringComparison.Ordinal))
             {
                 failing.Add(mapped);
             }
         }
 
-        // "NONE" with no conditions is the normal answer for a scope that has never been measured
-        // against a gate. Left unexplained it reads as a failure, and the next thing a model does is
-        // retry the call.
-        var note = string.Equals(status?.Status, "NONE", StringComparison.Ordinal) && conditions.Count == 0
+        // A scope never measured against a gate has no gate measures at all, which is reported as
+        // NONE - the word SonarQube itself used for it. Left unexplained it reads as a failure, and
+        // the next thing a model does is retry the call.
+        var status = gate.Level ?? "NONE";
+        var note = string.Equals(status, "NONE", StringComparison.Ordinal) && conditions.Count == 0
             ? "No quality gate has been computed for this scope yet — this is normal for a project or pull " +
               "request that has not been analysed against a gate, not an error."
             : null;
@@ -228,7 +228,7 @@ internal static class ResultMapper
             ProjectKey = project,
             Branch = scope.Branch,
             PullRequest = scope.PullRequest,
-            Status = status?.Status,
+            Status = status,
             Conditions = conditions,
             FailingConditions = failing,
             Url = ComponentKeys.ProjectUrl(baseUrl, project, scope),
@@ -288,6 +288,7 @@ internal static class ResultMapper
             Key = issue.Key,
             Rule = issue.Rule,
             RuleName = RuleName(issue.Rule, ruleNames),
+            RuleContext = issue.RuleDescriptionContextKey,
             Message = issue.Message,
             File = ComponentKeys.PathFor(issue.Component, paths),
             Line = issue.Line ?? issue.TextRange?.StartLine,
@@ -325,6 +326,7 @@ internal static class ResultMapper
             Key = issue.Key,
             Rule = issue.Rule,
             RuleName = RuleName(issue.Rule, ruleNames),
+            RuleContext = issue.RuleDescriptionContextKey,
             Message = issue.Message,
             File = ComponentKeys.PathFor(issue.Component, paths),
             Line = issue.Line ?? issue.TextRange?.StartLine,
@@ -339,6 +341,7 @@ internal static class ResultMapper
             CleanCodeAttributeCategory = issue.CleanCodeAttributeCategory,
             Tags = issue.Tags ?? [],
             Assignee = issue.Assignee,
+            Author = issue.Author,
             Effort = issue.Effort ?? issue.Debt,
             CreationDate = issue.CreationDate,
             UpdateDate = issue.UpdateDate,
@@ -360,13 +363,33 @@ internal static class ResultMapper
     /// restriction. The tool degrades with a note rather than throwing, because the half it did get
     /// is still worth having.
     /// </remarks>
-    internal static RuleDetail Rule(RuleDto rule, IReadOnlyList<string> requestedSections, string baseUrl)
+    /// <param name="rule">The rule as rules/search returned it.</param>
+    /// <param name="requestedSections">The section keys to return, in the order to return them.</param>
+    /// <param name="context">
+    /// An issue's <c>ruleContext</c>: keeps only that variant of each section the rule documents per
+    /// framework. Sections without a context are kept regardless, and a context the rule does not
+    /// document filters nothing - the note names the ones it does.
+    /// </param>
+    /// <param name="baseUrl">The configured base URL, for the rule's link.</param>
+    internal static RuleDetail Rule(
+        RuleDto rule,
+        IReadOnlyList<string> requestedSections,
+        string? context,
+        string baseUrl)
     {
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(requestedSections);
 
         var sections = new List<RuleSection>();
         var truncated = false;
+
+        var documented = (rule.DescriptionSections ?? [])
+            .Select(section => section.Context?.Key)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var wanted = string.IsNullOrWhiteSpace(context) ? null : context.Trim();
+        var filter = wanted is not null && documented.Contains(wanted, StringComparer.Ordinal) ? wanted : null;
 
         // Requested order, not response order: the caller asked for introduction before how_to_fix
         // because that is the order they are read in.
@@ -379,6 +402,12 @@ internal static class ResultMapper
                     continue;
                 }
 
+                if (filter is not null && section.Context?.Key is { } variant &&
+                    !string.Equals(variant, filter, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 var (content, cut) = HtmlToText.Convert(section.Content, ToolDefaults.MaxRuleSectionChars);
                 truncated |= cut;
 
@@ -387,6 +416,7 @@ internal static class ResultMapper
                     Key = section.Key,
                     Content = content,
                     Context = section.Context?.DisplayName ?? section.Context?.Key,
+                    ContextKey = section.Context?.Key,
                 });
             }
         }
@@ -406,7 +436,12 @@ internal static class ResultMapper
               "request gets: rule descriptions are sent only to an authenticated one. Set SONARQUBE_TOKEN in " +
               "this server's environment and restart it. The rule's name, impacts and clean-code attribute " +
               "above are unaffected."
-            : null;
+            : wanted is not null && filter is null
+                ? documented.Length == 0
+                    ? $"This rule documents no framework variants, so context '{wanted}' changed nothing."
+                    : $"This rule documents no '{wanted}' variant, so every variant is returned. Its contexts " +
+                      "are: " + string.Join(", ", documented) + "."
+                : null;
 
         return new RuleDetail
         {
@@ -472,9 +507,18 @@ internal static class ResultMapper
             PageSize = page.PageSize,
             TotalCount = page.Total,
             HasMore = HasMore(page),
-            Note = CapNote(page.Total),
+            Note = CapNote(page.Total) ?? (page.Total == 0 ? HotspotMigrationNote : null),
         };
     }
+
+    /// <summary>
+    /// Attached to an empty hotspot search. SonarQube Cloud deprecated hotspots on 16 June 2026 and moves
+    /// them into issues tagged <c>former-hotspot</c>, after which this endpoint answers with nothing -
+    /// indistinguishable, without this note, from a project that has no security findings at all.
+    /// </summary>
+    internal const string HotspotMigrationNote =
+        "No hotspots matched. SonarQube Cloud is migrating security hotspots into issues tagged " +
+        "former-hotspot; searchIssues with tags=former-hotspot lists the ones already moved.";
 
     /// <summary>Maps one security hotspot in full, converting the rule's three explanations from HTML.</summary>
     internal static HotspotDetail Hotspot(HotspotShowResponseDto response, string baseUrl)

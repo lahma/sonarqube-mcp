@@ -1,3 +1,43 @@
+# 1.2.0
+
+- **`getQualityGateStatus` no longer depends on a deprecated endpoint.** SonarQube Cloud deprecated
+  `api/qualitygates/project_status` on 16 September 2025, with no successor in its v2 API. The gate
+  now comes from the `alert_status` and `quality_gate_details` measures, which carry the same verdict
+  and the same conditions (compared live on a pull request). The result is unchanged, and a scope
+  without a gate still reads `NONE`.
+- **Security hotspots are being retired, and the server now says so.** SonarQube Cloud deprecated
+  hotspots on 16 June 2026 and is migrating them into issues tagged `former-hotspot`, after which
+  `searchHotspots` returns nothing. An empty result now points at `searchIssues` with
+  `tags=former-hotspot` instead of reading as "no security findings", and the server instructions
+  and the skill no longer say that hotspots never appear among issues.
+- **New: `authors` on `searchIssues` and `summarizeIssues`** - the issues a commit identity introduced,
+  usually your `git config user.email`. It needs a token, because SonarQube does not tell anonymous
+  callers who wrote a line. SonarQube wants this one parameter repeated rather than comma-joined; joined,
+  it silently matches nothing. `getIssue` now reports the issue's SCM `author`.
+- **New: per-framework fix guidance.** Issues now carry `ruleContext` (`spring`, `servlet`, `jsp`...),
+  and `getRule`'s new `context` argument returns only that framework's variant of the fix. The key
+  existed all along; SonarQube sends it only when asked, and the server never asked.
+- **New: `fixableByAgent`** on `searchIssues` and `summarizeIssues`: SonarQube's own, undocumented
+  classification of the issues an AI agent can fix.
+- **New: `summarizeIssues` groups by security standard** - `owaspTop10-2021`, `cwe` and
+  `sonarsourceSecurity`.
+- **Fixed: dependency-risk (SCA) ratings came back as numbers.** `sca_rating_*` measures are letters
+  now, like every other rating.
+- **Fixed: `transitionIssue` could lose a pull-request issue's next transitions.** When SonarQube's
+  answer did not include them, the follow-up read searched the main branch, where a pull request's
+  issue does not exist. It now reads the issue in its own scope.
+- **Listable in the MCP Registry.** `.mcp/server.json` moves to the registry's current schema and its
+  only accepted NuGet base URL, and the README carries the ownership marker for
+  `io.github.lahma/sonarqube-mcp`.
+- **The Linux binaries need glibc 2.34 or newer.** That is unchanged from 1.1.1, but it is now stated in
+  the README and enforced by the release build, which fails if a newer runner image would raise it.
+- Dependencies: `ModelContextProtocol` 2.2.0 to 2.4.0 (the pin stays exact), `Microsoft.Extensions.*`
+  10.0.12 to 10.0.15. The build moves to Fallout 10.5.0, which clears two high-severity advisories in
+  the build's own dependencies (nothing shipped was affected) and makes its `NuGet.Frameworks` pin
+  unnecessary. The tests move from xunit to NUnit 5 on Microsoft.Testing.Platform.
+- Still .NET 10, deliberately: measured against .NET 11, the binary came out 2% larger and no faster,
+  and both releases reach end of support on the same day.
+
 # 1.1.1
 
 - **Fixed: the Claude Code plugin blanked a token the user already had.** The manifest mapped every

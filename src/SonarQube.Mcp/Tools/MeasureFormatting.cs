@@ -16,7 +16,7 @@ namespace SonarQube.Mcp.Tools;
 /// actually judges.
 /// </para>
 /// <para>
-/// <b>A <c>*_rating</c> is a letter, not a score.</b> SonarQube sends <c>"1.0"</c> for A and
+/// <b>A rating (<c>*_rating</c>, and the SCA <c>sca_rating_*</c>) is a letter, not a score.</b> SonarQube sends <c>"1.0"</c> for A and
 /// <c>"5.0"</c> for E, which reads as a rating out of five where higher is better and means exactly
 /// the reverse. This is the single most confusing value in the whole API.
 /// </para>
@@ -28,8 +28,17 @@ namespace SonarQube.Mcp.Tools;
 /// </remarks>
 internal static class MeasureFormatting
 {
-    /// <summary>The metric-key suffix SonarQube uses for every A–E rating.</summary>
+    /// <summary>The metric-key suffix SonarQube uses for the A–E ratings.</summary>
     private const string RatingSuffix = "_rating";
+
+    /// <summary>
+    /// Where the dependency-risk (SCA) ratings put the word instead: <c>sca_rating_vulnerability</c>,
+    /// <c>new_sca_rating_licensing</c>. Not a bare <c>_rating_</c>, which would also match
+    /// <c>effort_to_reach_maintainability_rating_a</c> - a work duration, in minutes. Checked against
+    /// the full <c>metrics/search</c> catalogue on 2026-11-18: these two rules match every RATING metric
+    /// and nothing else.
+    /// </summary>
+    private const string ScaRatingInfix = "sca_rating_";
 
     /// <summary>The letters, indexed by rating minus one.</summary>
     private static readonly string[] RatingLetters = ["A", "B", "C", "D", "E"];
@@ -124,7 +133,7 @@ internal static class MeasureFormatting
     /// </returns>
     internal static string? Format(string? metric, string? value)
     {
-        if (string.IsNullOrEmpty(value) || metric is null || !metric.EndsWith(RatingSuffix, StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(value) || metric is null || !IsRating(metric))
         {
             return value;
         }
@@ -138,6 +147,11 @@ internal static class MeasureFormatting
 
         return rounded >= 1 && rounded <= RatingLetters.Length ? RatingLetters[rounded - 1] : value;
     }
+
+    /// <summary>Whether a metric key names an A–E rating.</summary>
+    internal static bool IsRating(string metric) =>
+        metric.EndsWith(RatingSuffix, StringComparison.Ordinal) ||
+        metric.Contains(ScaRatingInfix, StringComparison.Ordinal);
 
     /// <summary>Finds the new-code period entry, which is the one with index 1.</summary>
     private static MeasurePeriodDto? FirstNewCodePeriod(IReadOnlyList<MeasurePeriodDto>? periods)
