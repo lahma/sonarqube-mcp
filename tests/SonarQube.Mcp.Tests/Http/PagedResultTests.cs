@@ -1,9 +1,9 @@
 using System.Text.Json;
 
+using NUnit.Framework;
+
 using SonarQube.Mcp.Http;
 using SonarQube.Mcp.Http.Models;
-
-using Xunit;
 
 namespace SonarQube.Mcp.Tests.Http;
 
@@ -20,32 +20,32 @@ public class PagedResultTests
 {
     private static readonly string[] TwoItems = ["a", "b"];
 
-    [Fact]
+    [Test]
     public void TheNestedShapeIsRead()
     {
         var envelope = new PagedEnvelopeDto { Paging = new PagingDto { PageIndex = 2, PageSize = 3, Total = 47 } };
 
         var page = PagedResult.From(envelope, TwoItems, requestedPage: 9, requestedPageSize: 9);
 
-        Assert.Equal(2, page.Page);
-        Assert.Equal(3, page.PageSize);
-        Assert.Equal(47, page.Total);
-        Assert.Equal(TwoItems, page.Items);
+        Assert.That(page.Page, Is.EqualTo(2));
+        Assert.That(page.PageSize, Is.EqualTo(3));
+        Assert.That(page.Total, Is.EqualTo(47));
+        Assert.That(page.Items, Is.EqualTo(TwoItems));
     }
 
-    [Fact]
+    [Test]
     public void TheFlatShapeIsRead()
     {
         var envelope = new PagedEnvelopeDto { P = 2, Ps = 3, Total = 47 };
 
         var page = PagedResult.From(envelope, TwoItems, requestedPage: 9, requestedPageSize: 9);
 
-        Assert.Equal(2, page.Page);
-        Assert.Equal(3, page.PageSize);
-        Assert.Equal(47, page.Total);
+        Assert.That(page.Page, Is.EqualTo(2));
+        Assert.That(page.PageSize, Is.EqualTo(3));
+        Assert.That(page.Total, Is.EqualTo(47));
     }
 
-    [Fact]
+    [Test]
     public void WhenBothShapesArePresentTheNestedOneWins()
     {
         // issues/search sends both. They agree in practice, but one of them has to be authoritative
@@ -60,12 +60,12 @@ public class PagedResultTests
 
         var page = PagedResult.From(envelope, TwoItems, requestedPage: 9, requestedPageSize: 9);
 
-        Assert.Equal(2, page.Page);
-        Assert.Equal(3, page.PageSize);
-        Assert.Equal(47, page.Total);
+        Assert.That(page.Page, Is.EqualTo(2));
+        Assert.That(page.PageSize, Is.EqualTo(3));
+        Assert.That(page.Total, Is.EqualTo(47));
     }
 
-    [Fact]
+    [Test]
     public void AllThreeLiveShapesCollapseToTheSameResult()
     {
         var nested = PagedResult.From(
@@ -80,11 +80,11 @@ public class PagedResultTests
             new PagedEnvelopeDto { P = 1, Ps = 2, Total = 1606, Paging = new PagingDto { PageIndex = 1, PageSize = 2, Total = 1606 } },
             TwoItems, 1, 2);
 
-        Assert.Equal(nested, flat);
-        Assert.Equal(flat, both);
+        Assert.That(flat, Is.EqualTo(nested));
+        Assert.That(both, Is.EqualTo(flat));
     }
 
-    [Fact]
+    [Test]
     public void APartialNestedObjectFallsBackFieldByField()
     {
         // Resolved per field rather than by picking a shape wholesale, so a response that carries
@@ -93,36 +93,36 @@ public class PagedResultTests
 
         var page = PagedResult.From(envelope, TwoItems, requestedPage: 1, requestedPageSize: 1);
 
-        Assert.Equal(2, page.Page);
-        Assert.Equal(8, page.PageSize);
-        Assert.Equal(99, page.Total);
+        Assert.That(page.Page, Is.EqualTo(2));
+        Assert.That(page.PageSize, Is.EqualTo(8));
+        Assert.That(page.Total, Is.EqualTo(99));
     }
 
-    [Fact]
+    [Test]
     public void AnEnvelopeWithNoPagingAtAllEchoesTheRequest()
     {
         var page = PagedResult.From(new PagedEnvelopeDto(), TwoItems, requestedPage: 3, requestedPageSize: 25);
 
-        Assert.Equal(3, page.Page);
-        Assert.Equal(25, page.PageSize);
+        Assert.That(page.Page, Is.EqualTo(3));
+        Assert.That(page.PageSize, Is.EqualTo(25));
 
         // Never guessed from the item count: a full page would then look like the last one, and
         // hasMore is computed from this.
-        Assert.Null(page.Total);
+        Assert.That(page.Total, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void ANullEnvelopeEchoesTheRequestAndYieldsAnEmptyPage()
     {
         var page = PagedResult.From<string>(envelope: null, items: null, requestedPage: 3, requestedPageSize: 25);
 
-        Assert.Empty(page.Items);
-        Assert.Equal(3, page.Page);
-        Assert.Equal(25, page.PageSize);
-        Assert.Null(page.Total);
+        Assert.That(page.Items, Is.Empty);
+        Assert.That(page.Page, Is.EqualTo(3));
+        Assert.That(page.PageSize, Is.EqualTo(25));
+        Assert.That(page.Total, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void TheLivePagingShapesAreReadStraightOffTheFixtures()
     {
         // The claim under test is about the wire, so it is asserted against the wire.
@@ -139,19 +139,19 @@ public class PagedResultTests
             SonarWireJsonContext.Default.ComponentsTreeResponseDto)!;
 
         // issues/search: both shapes.
-        Assert.NotNull(issues.Paging);
-        Assert.NotNull(issues.Total);
+        Assert.That(issues.Paging, Is.Not.Null);
+        Assert.That(issues.Total, Is.Not.Null);
 
         // rules/search: flat only.
-        Assert.Null(rules.Paging);
-        Assert.Equal(1, rules.Total);
+        Assert.That(rules.Paging, Is.Null);
+        Assert.That(rules.Total, Is.EqualTo(1));
 
         // components/tree: nested only.
-        Assert.NotNull(tree.Paging);
-        Assert.Null(tree.Total);
+        Assert.That(tree.Paging, Is.Not.Null);
+        Assert.That(tree.Total, Is.Null);
 
-        Assert.Equal(1, PagedResult.From(issues, issues.Issues, 1, 2).Page);
-        Assert.Equal(1, PagedResult.From(rules, rules.Rules, 1, 1).Page);
-        Assert.Equal(1048, PagedResult.From(tree, tree.Components, 1, 3).Total);
+        Assert.That(PagedResult.From(issues, issues.Issues, 1, 2).Page, Is.EqualTo(1));
+        Assert.That(PagedResult.From(rules, rules.Rules, 1, 1).Page, Is.EqualTo(1));
+        Assert.That(PagedResult.From(tree, tree.Components, 1, 3).Total, Is.EqualTo(1048));
     }
 }

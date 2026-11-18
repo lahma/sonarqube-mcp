@@ -1,7 +1,7 @@
+using NUnit.Framework;
+
 using SonarQube.Mcp.Http.Models;
 using SonarQube.Mcp.Tools;
-
-using Xunit;
 
 namespace SonarQube.Mcp.Tests.Tools;
 
@@ -19,48 +19,44 @@ namespace SonarQube.Mcp.Tests.Tools;
 /// </remarks>
 public class MeasureFormattingTests
 {
-    [Theory]
-    [InlineData("1.0", "A")]
-    [InlineData("2.0", "B")]
-    [InlineData("3", "C")]
-    [InlineData("4.0", "D")]
-    [InlineData("5.0", "E")]
-    [InlineData("1", "A")]
+    [TestCase("1.0", "A")]
+    [TestCase("2.0", "B")]
+    [TestCase("3", "C")]
+    [TestCase("4.0", "D")]
+    [TestCase("5.0", "E")]
+    [TestCase("1", "A")]
     public void ARatingIsTranslatedIntoItsLetter(string value, string expected) =>
-        Assert.Equal(expected, MeasureFormatting.Format("sqale_rating", value));
+        Assert.That(MeasureFormatting.Format("sqale_rating", value), Is.EqualTo(expected));
 
-    [Theory]
-    [InlineData("new_reliability_rating")]
-    [InlineData("security_review_rating")]
-    [InlineData("software_quality_maintainability_rating")]
+    [TestCase("new_reliability_rating")]
+    [TestCase("security_review_rating")]
+    [TestCase("software_quality_maintainability_rating")]
     public void EveryRatingMetricIsRecognisedByItsSuffix(string metric) =>
-        Assert.Equal("A", MeasureFormatting.Format(metric, "1.0"));
+        Assert.That(MeasureFormatting.Format(metric, "1.0"), Is.EqualTo("A"));
 
     /// <summary>
     /// A value outside 1–5, or one that is not a number at all, is passed through: the raw text is
     /// still more useful than a dropped measure, and inventing a letter for it would be a lie.
     /// </summary>
-    [Theory]
-    [InlineData("0")]
-    [InlineData("6.0")]
-    [InlineData("")]
-    [InlineData("unknown")]
+    [TestCase("0")]
+    [TestCase("6.0")]
+    [TestCase("")]
+    [TestCase("unknown")]
     public void AnUntranslatableRatingIsLeftExactlyAsItArrived(string value) =>
-        Assert.Equal(value, MeasureFormatting.Format("sqale_rating", value));
+        Assert.That(MeasureFormatting.Format("sqale_rating", value), Is.EqualTo(value));
 
-    [Theory]
-    [InlineData("ncloc", "119857")]
-    [InlineData("coverage", "83.4")]
-    [InlineData("alert_status", "ERROR")]
-    [InlineData("sqale_index", "13115")]
+    [TestCase("ncloc", "119857")]
+    [TestCase("coverage", "83.4")]
+    [TestCase("alert_status", "ERROR")]
+    [TestCase("sqale_index", "13115")]
     public void ANonRatingMetricIsNeverTouched(string metric, string value) =>
-        Assert.Equal(value, MeasureFormatting.Format(metric, value));
+        Assert.That(MeasureFormatting.Format(metric, value), Is.EqualTo(value));
 
-    [Fact]
+    [Test]
     public void ANullValueOrMetricIsAnsweredWithTheValueItself()
     {
-        Assert.Null(MeasureFormatting.Format("sqale_rating", null));
-        Assert.Equal("1.0", MeasureFormatting.Format(null, "1.0"));
+        Assert.That(MeasureFormatting.Format("sqale_rating", null), Is.Null);
+        Assert.That(MeasureFormatting.Format(null, "1.0"), Is.EqualTo("1.0"));
     }
 
     /// <summary>
@@ -68,7 +64,7 @@ public class MeasureFormattingTests
     /// <c>value</c>: a quality gate judges new code, so mixing the two is wrong in the direction
     /// that matters most.
     /// </summary>
-    [Fact]
+    [Test]
     public void ANewCodeValueIsReportedSeparatelyFromTheOverallOne()
     {
         var values = MeasureFormatting.Values(
@@ -80,15 +76,16 @@ public class MeasureFormattingTests
             },
         ]);
 
-        var measure = Assert.Single(values);
+        Assert.That(values, Has.Exactly(1).Items);
+        var measure = values.Single();
 
-        Assert.Equal("new_violations", measure.Metric);
-        Assert.Null(measure.Value);
-        Assert.Equal("13", measure.NewCodeValue);
-        Assert.False(measure.BestValue);
+        Assert.That(measure.Metric, Is.EqualTo("new_violations"));
+        Assert.That(measure.Value, Is.Null);
+        Assert.That(measure.NewCodeValue, Is.EqualTo("13"));
+        Assert.That(measure.BestValue, Is.False);
     }
 
-    [Fact]
+    [Test]
     public void AMeasureCanCarryBothAnOverallAndANewCodeValue()
     {
         var values = MeasureFormatting.Values(
@@ -101,17 +98,18 @@ public class MeasureFormattingTests
             },
         ]);
 
-        var measure = Assert.Single(values);
+        Assert.That(values, Has.Exactly(1).Items);
+        var measure = values.Single();
 
-        Assert.Equal("83.4", measure.Value);
-        Assert.Equal("91.2", measure.NewCodeValue);
+        Assert.That(measure.Value, Is.EqualTo("83.4"));
+        Assert.That(measure.NewCodeValue, Is.EqualTo("91.2"));
     }
 
     /// <summary>
     /// Index 1 is the new-code period. A future second period must not be reported as new code, so
     /// the index is checked rather than the position taken on trust.
     /// </summary>
-    [Fact]
+    [Test]
     public void APeriodThatIsNotTheNewCodeOneIsIgnored()
     {
         var values = MeasureFormatting.Values(
@@ -124,11 +122,12 @@ public class MeasureFormattingTests
             },
         ]);
 
-        Assert.Null(Assert.Single(values).NewCodeValue);
+        Assert.That(values, Has.Exactly(1).Items);
+        Assert.That(values.Single().NewCodeValue, Is.Null);
     }
 
     /// <summary>An older response has one unnumbered period, and that one is the new-code one.</summary>
-    [Fact]
+    [Test]
     public void AnUnnumberedPeriodIsTreatedAsTheNewCodePeriod()
     {
         var values = MeasureFormatting.Values(
@@ -136,10 +135,11 @@ public class MeasureFormattingTests
             new MeasureDto { Metric = "new_coverage", Periods = [new MeasurePeriodDto { Value = "77.7" }] },
         ]);
 
-        Assert.Equal("77.7", Assert.Single(values).NewCodeValue);
+        Assert.That(values, Has.Exactly(1).Items);
+        Assert.That(values.Single().NewCodeValue, Is.EqualTo("77.7"));
     }
 
-    [Fact]
+    [Test]
     public void ARatingIsTranslatedInsideTheNewCodePeriodToo()
     {
         var values = MeasureFormatting.Values(
@@ -151,10 +151,11 @@ public class MeasureFormattingTests
             },
         ]);
 
-        Assert.Equal("E", Assert.Single(values).NewCodeValue);
+        Assert.That(values, Has.Exactly(1).Items);
+        Assert.That(values.Single().NewCodeValue, Is.EqualTo("E"));
     }
 
-    [Fact]
+    [Test]
     public void AMeasureWithNoMetricKeyIsDroppedRatherThanReturnedNameless()
     {
         var values = MeasureFormatting.Values(
@@ -163,21 +164,22 @@ public class MeasureFormattingTests
             new MeasureDto { Metric = "ncloc", Value = "2" },
         ]);
 
-        Assert.Equal("ncloc", Assert.Single(values).Metric);
+        Assert.That(values, Has.Exactly(1).Items);
+        Assert.That(values.Single().Metric, Is.EqualTo("ncloc"));
     }
 
-    [Fact]
+    [Test]
     public void NoMeasuresAtAllIsAnEmptyListRatherThanNull()
     {
-        Assert.Empty(MeasureFormatting.Values(null));
-        Assert.Empty(MeasureFormatting.Values([]));
+        Assert.That(MeasureFormatting.Values(null), Is.Empty);
+        Assert.That(MeasureFormatting.Values([]), Is.Empty);
     }
 
     /// <summary>
     /// <c>missingMetrics</c> is the whole answer to "absent is not zero": it names exactly what was
     /// requested and did not come back, in the order it was requested.
     /// </summary>
-    [Fact]
+    [Test]
     public void MissingMetricsNamesExactlyWhatWasAskedForAndNotReturned()
     {
         var returned = new HashSet<string>(StringComparer.Ordinal);
@@ -185,14 +187,14 @@ public class MeasureFormattingTests
 
         var missing = MeasureFormatting.MissingMetrics(["coverage", "ncloc", "new_coverage"], returned);
 
-        Assert.Equal(["coverage", "new_coverage"], missing);
+        Assert.That(missing, Is.EqualTo<string[]>(["coverage", "new_coverage"]));
     }
 
     /// <summary>
     /// A metric that came back without being asked for does not appear and does not throw: the
     /// caller asked a question, and this answers it rather than auditing SonarQube's response.
     /// </summary>
-    [Fact]
+    [Test]
     public void AMetricReturnedButNeverRequestedIsSimplyIgnored()
     {
         var returned = new HashSet<string>(StringComparer.Ordinal);
@@ -201,10 +203,10 @@ public class MeasureFormattingTests
             [new MeasureDto { Metric = "ncloc" }, new MeasureDto { Metric = "duplicated_lines" }],
             returned);
 
-        Assert.Empty(MeasureFormatting.MissingMetrics(["ncloc"], returned));
+        Assert.That(MeasureFormatting.MissingMetrics(["ncloc"], returned), Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void CollectMetricsIgnoresMeasuresWithNoKeyAndAnAbsentArray()
     {
         var returned = new HashSet<string>(StringComparer.Ordinal);
@@ -212,14 +214,14 @@ public class MeasureFormattingTests
         MeasureFormatting.CollectMetrics(null, returned);
         MeasureFormatting.CollectMetrics([new MeasureDto { Value = "1" }], returned);
 
-        Assert.Empty(returned);
+        Assert.That(returned, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public void EverythingRequestedComingBackLeavesNothingMissing()
     {
         var returned = new HashSet<string>(StringComparer.Ordinal) { "ncloc", "coverage" };
 
-        Assert.Empty(MeasureFormatting.MissingMetrics(["ncloc", "coverage"], returned));
+        Assert.That(MeasureFormatting.MissingMetrics(["ncloc", "coverage"], returned), Is.Empty);
     }
 }

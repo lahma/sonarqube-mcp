@@ -2,9 +2,9 @@ using System.Reflection;
 
 using ModelContextProtocol.Server;
 
-using SonarQube.Mcp.Tools;
+using NUnit.Framework;
 
-using Xunit;
+using SonarQube.Mcp.Tools;
 
 namespace SonarQube.Mcp.Tests.Tools;
 
@@ -31,59 +31,59 @@ public class ReadOnlyModeTests
     private static readonly string[] WriteToolNames =
         ["addIssueComment", "assignIssue", "bulkUpdateIssues", "setHotspotStatus", "transitionIssue"];
 
-    [Fact]
+    [Test]
     public void AllFourToolClassesAreRegisteredByDefault()
     {
         var types = McpServerSetup.ToolTypesFor(ToolTestHost.CreateOptions());
 
-        Assert.Equal(
-            [typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools), typeof(IssueWriteTools)],
-            types);
+        Assert.That(
+            types,
+            Is.EqualTo<Type[]>([typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools), typeof(IssueWriteTools)]));
     }
 
-    [Fact]
+    [Test]
     public void ReadOnlyModeLeavesTheWriteClassUnregistered()
     {
         var types = McpServerSetup.ToolTypesFor(ToolTestHost.CreateOptions(readOnly: true));
 
-        Assert.Equal(
-            [typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools)],
-            types);
+        Assert.That(
+            types,
+            Is.EqualTo<Type[]>([typeof(ProjectReadTools), typeof(IssueReadTools), typeof(MeasureReadTools)]));
 
-        Assert.DoesNotContain(typeof(IssueWriteTools), types);
+        Assert.That(types, Does.Not.Contain(typeof(IssueWriteTools)));
     }
 
     /// <summary>
     /// The claim that matters to a client: the tool collection a read-only server publishes contains
     /// none of the five write names, and exactly the eighteen read ones.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheReadOnlyToolCollectionContainsNoWriteTool()
     {
         var tools = ToolTestHost.BuildTools(McpServerSetup.ToolTypesFor(ToolTestHost.CreateOptions(readOnly: true)));
         var names = tools.Select(tool => tool.ProtocolTool.Name).ToArray();
 
-        Assert.Equal(18, names.Length);
+        Assert.That(names.Length, Is.EqualTo(18));
 
         foreach (var write in WriteToolNames)
         {
-            Assert.DoesNotContain(write, names, StringComparer.Ordinal);
+            Assert.That(names, Has.None.EqualTo(write).Using(StringComparer.Ordinal));
         }
 
-        Assert.Contains("searchIssues", names, StringComparer.Ordinal);
+        Assert.That(names, Has.Some.EqualTo("searchIssues").Using(StringComparer.Ordinal));
     }
 
-    [Fact]
+    [Test]
     public void TheFullToolCollectionContainsEveryWriteTool()
     {
         var tools = ToolTestHost.BuildTools(McpServerSetup.ToolTypesFor(ToolTestHost.CreateOptions()));
         var names = tools.Select(tool => tool.ProtocolTool.Name).ToArray();
 
-        Assert.Equal(23, names.Length);
+        Assert.That(names.Length, Is.EqualTo(23));
 
         foreach (var write in WriteToolNames)
         {
-            Assert.Contains(write, names, StringComparer.Ordinal);
+            Assert.That(names, Has.Some.EqualTo(write).Using(StringComparer.Ordinal));
         }
     }
 
@@ -92,21 +92,21 @@ public class ReadOnlyModeTests
     /// compiled, still attributed, and still builds into five complete tools — which is what makes
     /// "the flag hid them" a different claim from "the flag broke them".
     /// </summary>
-    [Fact]
+    [Test]
     public void TheWriteClassIsStillWholeInReadOnlyMode()
     {
         _ = McpServerSetup.ToolTypesFor(ToolTestHost.CreateOptions(readOnly: true));
 
-        Assert.NotNull(typeof(IssueWriteTools).GetCustomAttribute<McpServerToolTypeAttribute>());
+        Assert.That(typeof(IssueWriteTools).GetCustomAttribute<McpServerToolTypeAttribute>(), Is.Not.Null);
 
         var tools = ToolTestHost.BuildTools([typeof(IssueWriteTools)]);
 
-        Assert.Equal(
-            WriteToolNames,
-            tools.Select(tool => tool.ProtocolTool.Name).ToArray());
+        Assert.That(
+            tools.Select(tool => tool.ProtocolTool.Name).ToArray(),
+            Is.EqualTo(WriteToolNames));
     }
 
-    [Fact]
+    [Test]
     public void ToolTypesForRefusesToGuessWithoutOptions() =>
         Assert.Throws<ArgumentNullException>(() => McpServerSetup.ToolTypesFor(null!));
 }
