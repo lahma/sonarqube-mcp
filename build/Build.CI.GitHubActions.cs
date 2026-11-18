@@ -6,13 +6,15 @@ using Fallout.Components;
 //
 // One Linux job. FetchDepth = 0 because the changelog-driven version and GitRepository want the
 // full history. SmokeTest implies PublishAot, so CI publishes a real linux-x64 Native AOT binary
-// and speaks JSON-RPC to it on every push and pull request.
+// and speaks JSON-RPC to it on every push and pull request. Ubuntu 24.04 by name, not ubuntu-latest:
+// it is the image release.yml's linux-x64 leg builds on, so the binary CI checks (including its
+// glibc floor, R3) is the one a release would ship.
 //
 // PublishArtifacts = false: the per-RID archives that PublishAot .Produces() belong to the
 // hand-written release workflow (the generator has no matrix support), not to the PR gate.
 [GitHubActions(
     "build",
-    GitHubActionsImage.UbuntuLatest,
+    GitHubActionsImage.Ubuntu2404,
     FetchDepth = 0,
     OnPushBranches = ["main"],
     OnPullRequestBranches = ["main"],

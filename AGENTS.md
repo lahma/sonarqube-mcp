@@ -44,7 +44,7 @@ to audit — treat that as a hard constraint, not a preference.
 6. LF line endings everywhere (`.gitattributes` enforces it). `TreatWarningsAsErrors` is on —
    the compiler and analyzers are the lint step.
 
-## Design decisions (D1–D31)
+## Design decisions (D1–D32)
 
 | # | Decision |
 |---|---|
@@ -81,6 +81,7 @@ to audit — treat that as a hard constraint, not a preference.
 | D30 | **`getAnalysisStatus` reports, and never waits.** It is one call that returns the queue and the last finished task; it does not poll, sleep or retry until an analysis completes. A tool that blocked for the length of a Compute Engine run would hold the client's request open for minutes with no progress channel and no way to cancel meaningfully, and the client is in a far better position to decide how long to wait and what to do meanwhile. It is annotated `ReadOnly`/`Idempotent` — which is a claim about *effects*, not about a stable answer; that its answer changes between calls is the entire point, and the description says so. `ce/activity` (401 anonymously, project-admin with a token) and `ce/activity_status` (403) are out of the budget. |
 
 | D31 | **The plugin writes to `CLAUDE_PLUGIN_OPTION_*`, never to the plain variable names.** A Claude Code plugin manifest substitutes `${user_config.KEY}` with the option's value, and an option the user never filled in resolves to the **empty string** rather than being omitted — so mapping one onto `SONARQUBE_TOKEN` sets that variable to `""` in the child process and *shadows* whatever the user's environment already said. `SonarQubeMcpOptions` therefore reads `CLAUDE_PLUGIN_OPTION_<NAME>` first, treating blank as absent, and falls back to `<NAME>`: a filled-in option wins, a blank one changes nothing. Do not "simplify" the manifest back to the plain names — `PluginManifestTests` fails if you do, and the runtime symptom is a `404 Project doesn't exist` on a project key that was correct (issue #1). The prefix is Claude Code's own convention for the same values, so nothing new is invented. |
+| D32 | **The SDK and the target framework stay on the LTS line until a measured gain says otherwise.** `global.json` pins the .NET 10 SDK and `TargetFramework` is `net10.0`, through .NET 11 (STS, released 2026-11-10). Measured on 2026-11-18, `net11.0` made the AOT binary 1.9% larger and no faster; it ends support on the same day as .NET 10 (2028-11-14); it raises the platform floor (macOS 15, x86-64-v2); and it would stop the `dnx` package starting where only .NET 10 is installed, because a tool only ever rolls forward. ModelContextProtocol has no `net11.0` build either. The SDK stays too: the .NET 11 SDK would bring back the `NuGet.Frameworks` pin (*Package budget changes*, 2026-11-18) for a compiler and analyzers nothing here uses yet. Move at .NET 12 LTS, when RID-specific AOT tool packages take the `dnx` channel off the user's runtime, or when a .NET 11 feature is actually needed. |
 
 Five tools that could plausibly exist do not, and the reasons are part of the design rather than an
 oversight. They are **v1.1 candidates**, not rejections:
@@ -656,7 +657,7 @@ support) and runs five publish legs — one per RID, each on its own hardware �
 
 | RID | Runner |
 |---|---|
-| `linux-x64` | `ubuntu-latest` |
+| `linux-x64` | `ubuntu-24.04` |
 | `linux-arm64` | `ubuntu-24.04-arm` |
 | `win-x64` | `windows-latest` |
 | `win-arm64` | `windows-11-arm` |
@@ -666,7 +667,9 @@ Every leg runs `dotnet fallout SmokeTest --runtime <rid>`, and `SmokeTest` depen
 so each leg compiles its own binary, speaks JSON-RPC to it *on the architecture it targets*, and
 only then uploads the archive. **Never ship a binary that has not answered a handshake on its own
 architecture** — that is why the arm64 legs run on arm64 runners instead of being cross-compiled.
-`fail-fast` is off so one broken runtime cannot mask the state of the other four.
+`fail-fast` is off so one broken runtime cannot mask the state of the other four. A manual run
+(`workflow_dispatch`) builds and smoke-tests all five legs and releases nothing, because the
+`release` job runs only for a tag: that is how a runner or toolchain change is proven before tagging.
 
 `CHANGELOG.md` stays the version authority here too: `CreateGitHubRelease` refuses to publish
 unless `GITHUB_REF_NAME` equals `v{version parsed from CHANGELOG.md}`. To release, land the
@@ -688,6 +691,17 @@ throwaway tag rather than reasoned about, and both still apply here:
   but the extracting user. `PublishAot` therefore invokes the **`tar` CLI**
   (`ProcessTasks.StartProcess`), which is present on the GitHub runners and in Git Bash. Windows
   RIDs keep using `ZipTo`: a zip carries no Unix mode and the payload is a `.exe`.
+
+One property is this repository's own:
+
+- **R3 — the Linux binaries need glibc 2.34 or newer, and a publish that needs more fails.** A Native
+  AOT binary is linked against the glibc of the image that builds it and will not start on an older
+  one. v1.1.1 needs `GLIBC_2.34` at most on both architectures, read from its version-needs table.
+  `PublishAot` reads the same table back after every Linux publish (`build/GlibcRequirements.cs`) and
+  fails above `MaxGlibc` in `build/Build.cs`, because the floor follows the runner image:
+  `ubuntu-latest` moving to Ubuntu 26.04 would otherwise raise it without a single change here. The
+  `linux-x64` release leg and the CI job therefore name `ubuntu-24.04`, and README.md states the
+  floor. Raise it only on purpose, in both places.
 
 The release body is composed from `artifacts/release-notes.md`, which `Build.WriteReleaseNotes`
 reflows out of `CHANGELOG.md`'s newest section — one single-line bullet per entry — because

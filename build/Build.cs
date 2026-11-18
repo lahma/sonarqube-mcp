@@ -101,6 +101,17 @@ partial class Build : FalloutBuild,
         "bulkUpdateIssues",
     ];
 
+    /// <summary>
+    /// R3: the newest glibc a Linux binary may need - and so the oldest Linux it starts on (glibc 2.34:
+    /// Ubuntu 22.04, Debian 12, RHEL 9). Read off the v1.1.1 release binaries, both architectures.
+    /// </summary>
+    /// <remarks>
+    /// The floor follows the image the binary is built on, not anything in this repository, so
+    /// <see cref="AssertGlibcFloor"/> fails a publish that needs more. Raise it only on purpose, together
+    /// with README.md's requirement.
+    /// </remarks>
+    static readonly Version MaxGlibc = new(2, 34);
+
     /// <summary>How long SmokeTest waits for both JSON-RPC responses before giving up.</summary>
     static readonly TimeSpan SmokeTestTimeout = TimeSpan.FromSeconds(30);
 
@@ -123,6 +134,7 @@ partial class Build : FalloutBuild,
     AbsolutePath ReleaseNotesFile => ArtifactsDirectory / "release-notes.md";
 
     bool IsWindowsRuntime => Runtime.StartsWith("win", StringComparison.OrdinalIgnoreCase);
+    bool IsLinuxRuntime => Runtime.StartsWith("linux", StringComparison.OrdinalIgnoreCase);
     string ExecutableName => IsWindowsRuntime ? ProductName + ".exe" : ProductName;
     string ArchiveExtension => IsWindowsRuntime ? ".zip" : ".tar.gz";
     AbsolutePath PublishedExecutable => PublishDirectory / ExecutableName;
@@ -220,6 +232,8 @@ partial class Build : FalloutBuild,
             Assert.True(PublishedExecutable.FileExists(),
                 $"Native AOT publish did not produce '{PublishedExecutable}'");
 
+            var glibc = IsLinuxRuntime ? AssertGlibcFloor() : null;
+
             // Archive exactly the three files a user needs, not the whole publish directory.
             StagingDirectory.CreateOrCleanDirectory();
             PublishedExecutable.CopyToDirectory(StagingDirectory, ExistsPolicy.FileOverwrite);
@@ -251,8 +265,33 @@ partial class Build : FalloutBuild,
             Log.Information("Created {Archive}", ArchiveFile);
             ReportSummary(_ => _
                 .AddPair("Runtime", Runtime)
-                .AddPair("Archive", ArchiveFile.Name));
+                .AddPair("Archive", ArchiveFile.Name)
+                .AddPairWhenValueNotNull("Needs glibc", glibc));
         });
+
+    /// <summary>
+    /// R3: fails when the published Linux binary needs a newer glibc than <see cref="MaxGlibc"/>, and
+    /// returns the version it does need.
+    /// </summary>
+    string AssertGlibcFloor()
+    {
+        var needed = GlibcRequirements.Read(PublishedExecutable);
+        if (needed.Count == 0)
+        {
+            Log.Information("{Executable} names no glibc version", PublishedExecutable);
+            return null;
+        }
+
+        var highest = needed[^1];
+        Assert.True(highest <= MaxGlibc,
+            $"'{PublishedExecutable}' needs GLIBC_{highest}, newer than the recorded floor GLIBC_{MaxGlibc}, so it " +
+            "would no longer start on every Linux README.md promises. The build image has most likely moved: build " +
+            "on the older one, or raise MaxGlibc in build/Build.cs and the README's requirement on purpose.");
+
+        Log.Information("{Executable} needs glibc {Highest} or newer (floor {Floor})",
+            PublishedExecutable, highest, MaxGlibc);
+        return highest.ToString();
+    }
 
     Target SmokeTest => _ => _
         .Description("Runs a real stdio JSON-RPC handshake against the published AOT binary, in both modes")

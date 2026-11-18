@@ -102,14 +102,14 @@ Lands first and alone: it fixes the build-only advisories even if nothing else s
 
 ## Phase 2: Release-path hardening
 
-- [ ] `.github/workflows/release.yml` (hand-written): run `linux-x64` on `ubuntu-24.04`, not `ubuntu-latest`, with a comment saying why. Update the RID table in AGENTS.md.
-- [ ] A glibc floor check in `Build.cs`'s `PublishAot` for `linux-*` RIDs. Read the `GLIBC_x.y` version requirements from the published binary and fail when the highest exceeds a recorded constant. Take the baseline from the v1.1.1 linux assets.
+- [x] `.github/workflows/release.yml` (hand-written): run `linux-x64` on `ubuntu-24.04`, not `ubuntu-latest`, with a comment saying why. Update the RID table in AGENTS.md.
+- [x] A glibc floor check in `Build.cs`'s `PublishAot` for `linux-*` RIDs. Read the `GLIBC_x.y` version requirements from the published binary and fail when the highest exceeds a recorded constant. Take the baseline from the v1.1.1 linux assets: `GLIBC_2.34` on both architectures.
   - Without the check, a runner change raises the floor silently.
   - bitbucket-mcp is building the same check; share one implementation shape.
   - Record the floor as an R-property in *Release engineering*.
-- [ ] `release.yml`: add `workflow_dispatch` and gate the `release` job on `startsWith(github.ref, 'refs/tags/')`. That proves all five legs (handshake and glibc check) before a tag exists. Today a broken leg first shows up at release time.
-- [ ] AGENTS.md: add **D32**. The SDK and `TargetFramework` follow the LTS line until a measured gain or the `dnx` channel allows otherwise (decision 1). Update the heading to D1–D32.
-- [ ] Verify: `SmokeTest` locally; on GitHub, a manual `release` dry run with all five legs green.
+- [x] `release.yml`: add `workflow_dispatch` and gate the `release` job on `startsWith(github.ref, 'refs/tags/')`. That proves all five legs (handshake and glibc check) before a tag exists. Today a broken leg first shows up at release time.
+- [x] AGENTS.md: add **D32**. The SDK and `TargetFramework` follow the LTS line until a measured gain or the `dnx` channel allows otherwise (decision 1). Update the heading to D1–D32.
+- [x] Verify: `SmokeTest` locally (win-x64); the reader was run against both v1.1.1 Linux binaries. The CI job also moved to `ubuntu-24.04` (no branch protection names the old check). **Open:** the first GitHub run (CI plus a manual `release` dry run) exercises the Linux path; it needs a push.
 
 ## Phase 3: Package refresh
 

@@ -21,6 +21,10 @@ on:
   push:
     tags:
       - 'v*'
+  # A manual run builds, smoke-tests and glibc-checks all five legs and releases nothing: the
+  # release job below runs only for a tag. It is how a runner or toolchain change is proven before
+  # the tag exists rather than at release time.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,7 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Named, not ubuntu-latest: a Linux binary needs the glibc of the image it is built on,
+          # and PublishAot fails above the recorded floor (AGENTS.md R3).
+          - os: ubuntu-24.04
             rid: linux-x64
           - os: ubuntu-24.04-arm
             rid: linux-arm64
@@ -67,6 +73,7 @@ jobs:
   release:
     name: release
     needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

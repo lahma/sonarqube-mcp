@@ -82,7 +82,9 @@ chmod +x sonarqube-mcp
 ```
 
 There is no runtime to install: the binary is self-contained. Put it wherever you like and note
-the absolute path — that is what the MCP client configuration needs.
+the absolute path — that is what the MCP client configuration needs. The Linux binaries need
+glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 or later); musl distributions such as Alpine
+are not supported.
 
 With no arguments the binary speaks MCP over stdio. It has one other mode worth knowing:
 
