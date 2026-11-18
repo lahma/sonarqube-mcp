@@ -113,11 +113,11 @@ Lands first and alone: it fixes the build-only advisories even if nothing else s
 
 ## Phase 3: Package refresh
 
-- [ ] `Directory.Packages.props`, app group: `ModelContextProtocol` `[2.4.0]` (stays an exact pin), and `Microsoft.Extensions.DependencyInjection` / `Logging.Console` 10.0.15. That's the TFM's servicing line; 11.0.0 would drag the 11.x abstractions in as packages.
+- [x] `Directory.Packages.props`, app group: `ModelContextProtocol` `[2.4.0]` (stays an exact pin), and `Microsoft.Extensions.DependencyInjection` / `Logging.Console` 10.0.15. That's the TFM's servicing line; 11.0.0 would drag the 11.x abstractions in as packages.
 - [ ] MCP SDK behaviour to pin down with tests (written in NUnit, after Phase 3b):
   - 2.4.0 matches protocol property names case-sensitively (#1934). Add a test that a mis-cased argument does not silently bind.
   - Since 2.3.0, `tools/list` keeps registration order. `SmokeTest` compares sets, so nothing depends on order; leave it that way.
-- [ ] Verify: Test plus SmokeTest on the CI path.
+- [x] Verify: Test plus SmokeTest on the CI path.
 
 ## Phase 3b: NUnit on Microsoft.Testing.Platform
 

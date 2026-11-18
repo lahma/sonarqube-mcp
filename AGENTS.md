@@ -445,7 +445,7 @@ the README — the schemas arrive with every session anyway, and the README is f
 Complete, as of the initial implementation. Versions are centrally pinned in
 `Directory.Packages.props`, with transitive pinning on.
 
-- `src/SonarQube.Mcp`: `ModelContextProtocol` (pinned **exactly** `[2.2.0]`, because the AOT and
+- `src/SonarQube.Mcp`: `ModelContextProtocol` (pinned **exactly** `[2.4.0]`, because the AOT and
   serializer contract this server depends on — resolver chaining, schema generation, annotation
   defaults — is verified against that one version and a floating range would move it under a
   release), `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.Logging.Console`.
@@ -501,6 +501,16 @@ Fallout component still evaluates projects in-process: that SDK's `Microsoft.Bui
 `NuGet.Frameworks` 7.11.0.0, Fallout brings 7.9.0, and whether the evaluation fails depends on which
 copy loads first (reproduced in bitbucket-mcp, passed here by luck). 8.0.0 is the SDK's own copy and
 satisfies both SDKs; Fallout-build/Fallout#731 tracks the fix.
+
+**2026-11-18 — app version refresh, no ids added or removed.** `ModelContextProtocol` `[2.2.0]` to
+`[2.4.0]`, still an exact pin; for net10.0 it adds no package id, only newer
+`Microsoft.Extensions.*.Abstractions` and `Microsoft.Extensions.AI.Abstractions` versions. Two of
+its changes touch this server: since 2.3.0 `tools/list` keeps registration order (nothing here
+depends on the order — `SmokeTest` compares sets), and since 2.4.0 protocol property names match
+case-sensitively (#1934). `Microsoft.Extensions.DependencyInjection` and
+`Microsoft.Extensions.Logging.Console` 10.0.12 to **10.0.15**, deliberately not 11.0.0: the 11.x
+packages target net10.0 too, but they would pull the 11.x abstractions in as packages, while the
+10.0 servicing line is the one that matches the target framework (D32).
 
 The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
 `Fallout.Common` as a transitive dependency — no new `PackageReference` anywhere, and

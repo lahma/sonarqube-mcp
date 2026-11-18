@@ -10,9 +10,9 @@
        from the environment, so there is no token cache to protect and no ProtectedData row. -->
   <ItemGroup Label="App">
     <!-- Exact pin: the MCP SDK's AOT/serializer contract is verified against this version only. -->
-    <PackageVersion Include="ModelContextProtocol" Version="[2.2.0]" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
+    <PackageVersion Include="ModelContextProtocol" Version="[2.4.0]" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.15" />
   </ItemGroup>
 
   <!-- xunit stays on 3.x. Version 4 drops VSTest-mode support, and VSTest mode is the D11

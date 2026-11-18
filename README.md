@@ -9,7 +9,7 @@ starting in roughly ten milliseconds. The point of the project is a supply chain
 actually audit: the whole runtime dependency tree is three packages, all from Microsoft or the
 official MCP organisation —
 [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) (pinned exactly to
-2.2.0), `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`. Set
+2.4.0), `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`. Set
 `SONARQUBE_MCP_READ_ONLY=1` and the five write tools are not registered at all. MIT licensed.
 
 SonarQube Server — the self-hosted and Data Center editions — is explicitly out of scope.
