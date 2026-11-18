@@ -94,6 +94,17 @@ internal sealed record IssueDto
     [JsonPropertyName("project")]
     public string? Project { get; init; }
 
+    /// <summary>
+    /// The branch the issue was found on; absent on the main branch and on a pull request. Together
+    /// with <see cref="PullRequest"/> it is the scope a re-read of this key has to name (C13).
+    /// </summary>
+    [JsonPropertyName("branch")]
+    public string? Branch { get; init; }
+
+    /// <summary>The pull request the issue was found on, as the SCM number in a string; absent otherwise.</summary>
+    [JsonPropertyName("pullRequest")]
+    public string? PullRequest { get; init; }
+
     /// <summary>The project's display name.</summary>
     [JsonPropertyName("projectName")]
     public string? ProjectName { get; init; }

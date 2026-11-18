@@ -167,28 +167,71 @@ public class SonarApiClientTests
         Assert.That(RequestUrl.QueryNames(request.Uri), Is.EqualTo<string[]>(["project"]));
     }
 
+    /// <summary>
+    /// C14: the gate comes from the two gate measures, with its conditions parsed out of the JSON
+    /// inside quality_gate_details, rather than from the deprecated qualitygates/project_status.
+    /// </summary>
     [Test]
-    public async Task GetQualityGateProjectStatusScopesToAPullRequest()
+    public async Task GetQualityGateReadsTheTwoGateMeasuresForAPullRequest()
     {
         using var stub = new StubHttpMessageHandler();
-        stub.EnqueueJson(SonarFixtures.Read("qualitygates-project-status-error.json"));
+        stub.EnqueueJson(SonarFixtures.Read("measures-component-quality-gate-pr.json"));
         using var client = TestClient.Create(stub);
 
-        var response = await client.GetQualityGateProjectStatusAsync(
+        var gate = await client.GetQualityGateAsync(
             Project,
-            pullRequest: "3267",
+            pullRequest: "4358",
             cancellationToken: TestContext.CurrentContext.CancellationToken);
 
         Assert.That(stub.Requests, Has.Exactly(1).Items);
         var request = stub.Requests.Single();
 
-        Assert.That(RequestUrl.Path(request.Uri), Is.EqualTo("/api/qualitygates/project_status"));
-        Assert.That(RequestUrl.QueryValue(request.Uri, "projectKey"), Is.EqualTo(Project));
-        Assert.That(RequestUrl.QueryValue(request.Uri, "pullRequest"), Is.EqualTo("3267"));
+        Assert.That(RequestUrl.Path(request.Uri), Is.EqualTo("/api/measures/component"));
+        Assert.That(RequestUrl.QueryValue(request.Uri, "component"), Is.EqualTo(Project));
+        Assert.That(RequestUrl.QueryValue(request.Uri, "metricKeys"), Is.EqualTo("alert_status,quality_gate_details"));
+        Assert.That(RequestUrl.QueryValue(request.Uri, "pullRequest"), Is.EqualTo("4358"));
         Assert.That(RequestUrl.QueryValue(request.Uri, "branch"), Is.Null);
 
-        Assert.That(response.ProjectStatus?.Status, Is.EqualTo("ERROR"));
-        Assert.That(response.ProjectStatus?.Conditions?.Count, Is.EqualTo(5));
+        Assert.That(gate.Level, Is.EqualTo("OK"));
+        Assert.That(gate.IgnoredConditions, Is.False);
+        Assert.That(gate.Conditions?.Count, Is.EqualTo(4));
+        Assert.That(gate.Conditions![3].Metric, Is.EqualTo("new_security_hotspots_reviewed"));
+        Assert.That(gate.Conditions[3].Op, Is.EqualTo("LT"));
+        Assert.That(gate.Conditions[3].Period, Is.EqualTo(1));
+        Assert.That(gate.Conditions[3].Error, Is.EqualTo("100"));
+        Assert.That(gate.Conditions[3].Actual, Is.EqualTo("100.0"));
+        Assert.That(gate.Conditions[3].Level, Is.EqualTo("OK"));
+    }
+
+    [Test]
+    public async Task AnUngatedScopeHasNoGateMeasuresAndReadsAsAnEmptyGate()
+    {
+        using var stub = new StubHttpMessageHandler();
+        stub.EnqueueJson(SonarFixtures.Read("measures-component-quality-gate-none.json"));
+        using var client = TestClient.Create(stub);
+
+        var gate = await client.GetQualityGateAsync(
+            Project, cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(gate.Level, Is.Null);
+        Assert.That(gate.Conditions, Is.Null);
+    }
+
+    [Test]
+    public async Task AnIssueOfAPullRequestCarriesItsOwnScope()
+    {
+        using var stub = new StubHttpMessageHandler();
+        stub.EnqueueJson(SonarFixtures.Read("issues-search-by-key-pullrequest.json"));
+        using var client = TestClient.Create(stub);
+
+        var response = await client.SearchIssuesAsync(
+            componentKeys: [Project],
+            issues: ["AaCDWeEWg4L35vfD5PUF"],
+            pullRequest: "3735",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(response.Issues![0].PullRequest, Is.EqualTo("3735"));
+        Assert.That(response.Issues[0].Branch, Is.Null);
     }
 
     // ------------------------------------------------------------------ URLs: issues
@@ -1393,7 +1436,7 @@ public class SonarApiClientTests
         {
             "issues-search-page.json" or "issues-search-empty.json" or "issues-search-single.json"
                 or "issues-search-facets.json" or "issues-search-facets-pullrequest.json"
-                or "issues-search-by-key-pullrequest.json" =>
+                or "issues-search-by-key-pullrequest.json" or "issues-search-rule-context.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssuesSearchResponseDto),
             "issues-changelog.json" or "issues-changelog-anonymous.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.IssueChangelogResponseDto),
@@ -1407,7 +1450,9 @@ public class SonarApiClientTests
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.HotspotsSearchResponseDto),
             "hotspots-show.json" or "hotspots-show-with-comment.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.HotspotShowResponseDto),
-            "measures-component.json" or "measures-component-periods.json" =>
+            "measures-component.json" or "measures-component-periods.json"
+                or "measures-component-quality-gate-pr.json" or "measures-component-quality-gate-none.json"
+                or "measures-component-quality-gate-error.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresComponentResponseDto),
             "measures-component-tree.json" or "measures-component-tree-coverage-sorted.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresComponentTreeResponseDto),
@@ -1415,8 +1460,6 @@ public class SonarApiClientTests
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MeasuresHistoryResponseDto),
             "metrics-search.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.MetricsSearchResponseDto),
-            "qualitygates-project-status-none.json" or "qualitygates-project-status-error.json" =>
-                JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.ProjectStatusResponseDto),
             "components-search.json" =>
                 JsonSerializer.Deserialize(json, SonarWireJsonContext.Default.ComponentsSearchResponseDto),
             "components-tree-leaves.json" =>
@@ -1453,7 +1496,8 @@ public class SonarApiClientTests
             "hotspots-search-page.json", "hotspots-show.json", "hotspots-show-with-comment.json",
             "measures-component.json", "measures-component-periods.json", "measures-component-tree.json",
             "measures-search-history.json", "metrics-search.json",
-            "qualitygates-project-status-none.json", "qualitygates-project-status-error.json",
+            "measures-component-quality-gate-pr.json", "measures-component-quality-gate-none.json",
+            "measures-component-quality-gate-error.json", "issues-search-rule-context.json",
             "components-search.json", "components-tree-leaves.json",
             "project-branches-list.json", "project-pull-requests-list.json",
             "sources-lines.json", "rules-search-rule-key.json", "rules-search-with-sections.json",

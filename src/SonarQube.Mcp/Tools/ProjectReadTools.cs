@@ -239,11 +239,11 @@ internal sealed class ProjectReadTools
 
         return await ToolErrors.ExecuteAsync(context, async () =>
         {
-            var response = await client
-                .GetQualityGateProjectStatusAsync(project, scope.Branch, scope.PullRequest, cancellationToken)
+            var gate = await client
+                .GetQualityGateAsync(project, scope.Branch, scope.PullRequest, cancellationToken)
                 .ConfigureAwait(false);
 
-            return ResultMapper.QualityGate(response, project, scope, options.BaseUrlText);
+            return ResultMapper.QualityGate(gate, project, scope, options.BaseUrlText);
         }).ConfigureAwait(false);
     }
 

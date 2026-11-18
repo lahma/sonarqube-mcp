@@ -1,5 +1,7 @@
 # sonarqube-mcp
 
+<!-- mcp-name: io.github.lahma/sonarqube-mcp -->
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server for **SonarQube Cloud**, covering
 the surface a coding agent actually uses in twenty-three tools: quality gates, analysis status,
 issue triage and aggregation, security hotspots, measures, per-line coverage and rule explanations,

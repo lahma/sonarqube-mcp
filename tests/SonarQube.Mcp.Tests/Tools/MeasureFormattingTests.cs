@@ -34,6 +34,21 @@ public class MeasureFormattingTests
     public void EveryRatingMetricIsRecognisedByItsSuffix(string metric) =>
         Assert.That(MeasureFormatting.Format(metric, "1.0"), Is.EqualTo("A"));
 
+    /// <summary>The dependency-risk ratings put the word in the middle of the key.</summary>
+    [TestCase("sca_rating_vulnerability", "1.0", "A")]
+    [TestCase("sca_rating_licensing", "3.0", "C")]
+    [TestCase("new_sca_rating_any_issue", "5.0", "E")]
+    public void TheScaRatingsAreLettersToo(string metric, string value, string expected) =>
+        Assert.That(MeasureFormatting.Format(metric, value), Is.EqualTo(expected));
+
+    /// <summary>
+    /// Why the SCA rule is not a bare <c>_rating_</c> infix: this one is a work duration in minutes,
+    /// and "5" must not become "E".
+    /// </summary>
+    [Test]
+    public void AWorkDurationWithRatingInItsNameIsNotARating() =>
+        Assert.That(MeasureFormatting.Format("effort_to_reach_maintainability_rating_a", "5"), Is.EqualTo("5"));
+
     /// <summary>
     /// A value outside 1–5, or one that is not a number at all, is passed through: the raw text is
     /// still more useful than a dropped measure, and inventing a letter for it would be a lie.

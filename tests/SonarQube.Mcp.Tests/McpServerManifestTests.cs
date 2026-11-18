@@ -130,6 +130,33 @@ public class McpServerManifestTests
         }
     }
 
+    /// <summary>
+    /// What the MCP Registry refuses or warns about when a NuGet-backed server is published to it
+    /// (D17). Its NuGet validator accepts exactly one base URL, the schema caps <c>description</c> at
+    /// 100 characters, and ownership is proven by an <c>mcp-name:</c> line in the README packed
+    /// <em>into the published version</em> - which is why the marker has to be checked here, before
+    /// a version ships without it and can never be listed.
+    /// </summary>
+    [Test]
+    public void ManifestIsListableInTheMcpRegistry()
+    {
+        var root = FindRepositoryRoot();
+        using var manifest = ReadManifest(root);
+
+        Assert.That(
+            manifest.RootElement.GetProperty("$schema").GetString(),
+            Is.EqualTo("https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"));
+        Assert.That(
+            SingleNuGetPackage(manifest).GetProperty("registryBaseUrl").GetString(),
+            Is.EqualTo("https://api.nuget.org/v3/index.json"));
+        Assert.That(manifest.RootElement.GetProperty("description").GetString()!.Length, Is.LessThanOrEqualTo(100));
+
+        var name = manifest.RootElement.GetProperty("name").GetString();
+        var readme = File.ReadAllText(Path.Combine(root, "README.md"));
+
+        Assert.That(readme, Contains.Substring($"mcp-name: {name}").Using(StringComparison.Ordinal));
+    }
+
     private static JsonElement SingleNuGetPackage(JsonDocument manifest)
     {
         var packages = manifest.RootElement.GetProperty("packages")

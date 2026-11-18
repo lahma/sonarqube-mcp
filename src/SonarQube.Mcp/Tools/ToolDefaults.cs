@@ -72,7 +72,7 @@ internal static class ToolDefaults
     /// The default groupings of <c>summarizeIssues</c>: how bad, which rules, which files.
     /// </summary>
     /// <remarks>
-    /// Three rather than all eleven, because every extra grouping is a hundred more buckets in the
+    /// Three rather than all fourteen, because every extra grouping is a hundred more buckets in the
     /// response and the first question of a triage is always the same one.
     /// </remarks>
     internal static readonly string[] DefaultIssueGroupings = ["impactSeverities", "rules", "files"];
@@ -104,6 +104,9 @@ internal static class ToolDefaults
         ["impactSeverities"] = "impactSeverities",
         ["impactSoftwareQualities"] = "impactSoftwareQualities",
         ["cleanCodeAttributeCategories"] = "cleanCodeAttributeCategories",
+        ["owaspTop10-2021"] = "owaspTop10-2021",
+        ["cwe"] = "cwe",
+        ["sonarsourceSecurity"] = "sonarsourceSecurity",
     };
 
     /// <summary>

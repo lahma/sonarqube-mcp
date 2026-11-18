@@ -58,13 +58,13 @@ to audit — treat that as a hard constraint, not a preference.
 | D8 | **Static tool methods**; `SonarApiClient` and `SonarQubeMcpOptions` as plain parameters 0 and 1 (DI-bound via `IServiceProviderIsService`, excluded from the schema); avoids per-call instance activation and is directly unit-testable. |
 | D9 | No `RuntimeIdentifiers` in the csproj (would pull ILCompiler packs per RID on every restore); the RID list lives in `Build.cs` and the release matrix, and reaches publish via `-r`. |
 | D10 | No `PublishSingleFile` (ignored under AOT). |
-| D11 | **xunit.v3 + `xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk`** (VSTest bridge) so the stock Fallout `ITest` component works unmodified. No mocking or assertion libraries. |
+| D11 | **NUnit 5 on Microsoft.Testing.Platform, run by a hand-written `Test` target.** `global.json` sets `test.runner`, the test project sets `EnableNUnitRunner`, and `build/Build.cs`'s `Test` runs `dotnet test --project` after `Compile`: Fallout's stock `ITest` drives VSTest only (Fallout-build/Fallout#674), and MTP mode rejects both its positional project argument and its `--logger trx`. `FixtureLifeCycle(InstancePerTestCase)` keeps a fresh instance per test, and fixtures run one at a time, NUnit's default. No mocking or assertion libraries: NUnit's own constraint model, with every string check made ordinal (see *Testing*). |
 | D12 | **Environment variables only, and `FromEnvironment` never throws.** One `SonarQubeMcpOptions` record, read once in `RunStdioAsync`; a malformed or out-of-range value falls back to the documented default and is reported through the logger (stderr) rather than by failing startup. A server that refuses to start leaves the MCP client with a dead process and no channel to complain on — stdout is the protocol. There is no config file, no `Microsoft.Extensions.Configuration` and no command-line configuration. |
 | D13 | **A static user token, and nothing else.** No OAuth, no device flow, no token cache, therefore no `login`/`logout` and no `System.Security.Cryptography.ProtectedData` (the template's fourth package). The token is attached as `Authorization: Bearer` **per request** by `AuthenticationHandler` and never set on `DefaultRequestHeaders`, so a request the pipeline issues for its own reasons cannot carry the credential by default. A 401 is not retried: a static token that was rejected once will be rejected again. |
 | D14 | **`SONARQUBE_URL` is allowlisted, not merely parsed**: `https` only, and the host must be `sonarcloud.io`, `www.sonarcloud.io` or `sonarqube.us`. Anything else falls back to the default (D12) and logs a warning. This is what keeps "Cloud only" a property of the binary rather than a sentence in a README. |
 | D15 | **CLI modes on the same binary** (argv dispatch, hand-rolled parsing): `serve` (the default with no args), `status`, `version`, `help`. `Cli/` may use stdout; server mode never does. `status` is the whole support surface — it prints what the server would use and probes the credential. |
 | D16 | **Redirects are not followed at all.** The transport sets `AllowAutoRedirect = false` and a 3xx becomes a `SonarApiException` naming the `Location`. No `api/` endpoint on Cloud is expected to redirect, and `SocketsHttpHandler` strips `Authorization` on every automatic redirect anyway — so a followed redirect would either be an anonymous request presented as an authenticated one, or a credential sent somewhere the allowlist never approved. Loud beats silent. |
-| D17 | **NuGet is a second distribution channel, not the primary one.** `dotnet pack` produces `mcp-sonarqube`, a framework-dependent .NET tool package (`PackAsTool`) carrying `PackageType=McpServer` and an embedded `.mcp/server.json`, so `dnx mcp-sonarqube@{version}` works without a download step; the Native AOT binaries stay the recommended way to run the server. **The NuGet package id is the one name that is not `sonarqube-mcp`** — on 2026-08-22 two pushes of v1.0.0 were answered `Conflict` by nuget.org: first `sonarqube-mcp`, then `sonarcloud-mcp`, so SonarSource evidently holds **both** the `SonarQube*` and the `SonarCloud*` reserved id prefixes. The id therefore leads with `mcp-`, which is unreserved — many independent owners publish `mcp-*` packages. Only `<PackageId>`, `.mcp/server.json`'s `identifier` and its NuGet entry, the plugin's `dnx` argument and the prose that quotes them moved; `AssemblyName`, `ToolCommandName`, the MCP server `name`, the plugin and marketplace names, the archive names and the namespaces are all still `sonarqube-mcp`, so `dnx mcp-sonarqube` installs and runs a command called `sonarqube-mcp`. Do not "fix" the mismatch by renaming anything else, and do not retry a `Sonar*` id: the id a package is fetched by is not the name it runs under, and the reservations are not going away. It is pushed by **trusted publishing** — the workflow exchanges its GitHub OIDC token for an API key that lives minutes — so no NuGet API key exists in the repository or in GitHub secrets. The exchange is **C# inside the build** (`build/Build.Publish.cs`), not a marketplace action. It has its own generated workflow file, `.github/workflows/publish.yml`, triggered by `v*.*.*` tags only. |
+| D17 | **NuGet is a second distribution channel, not the primary one.** `dotnet pack` produces `mcp-sonarqube`, a framework-dependent .NET tool package (`PackAsTool`) carrying `PackageType=McpServer` and an embedded `.mcp/server.json`, so `dnx mcp-sonarqube@{version}` works without a download step; the Native AOT binaries stay the recommended way to run the server. **The NuGet package id is the one name that is not `sonarqube-mcp`** — on 2026-08-22 two pushes of v1.0.0 were answered `Conflict` by nuget.org: first `sonarqube-mcp`, then `sonarcloud-mcp`, so SonarSource evidently holds **both** the `SonarQube*` and the `SonarCloud*` reserved id prefixes. The id therefore leads with `mcp-`, which is unreserved — many independent owners publish `mcp-*` packages. Only `<PackageId>`, `.mcp/server.json`'s `identifier` and its NuGet entry, the plugin's `dnx` argument and the prose that quotes them moved; `AssemblyName`, `ToolCommandName`, the MCP server `name`, the plugin and marketplace names, the archive names and the namespaces are all still `sonarqube-mcp`, so `dnx mcp-sonarqube` installs and runs a command called `sonarqube-mcp`. Do not "fix" the mismatch by renaming anything else, and do not retry a `Sonar*` id: the id a package is fetched by is not the name it runs under, and the reservations are not going away. It is pushed by **trusted publishing** — the workflow exchanges its GitHub OIDC token for an API key that lives minutes — so no NuGet API key exists in the repository or in GitHub secrets. The exchange is **C# inside the build** (`build/Build.Publish.cs`), not a marketplace action. It has its own generated workflow file, `.github/workflows/publish.yml`, triggered by `v*.*.*` tags only. Since 1.2.0 the package is also **listable in the MCP Registry** as `io.github.lahma/sonarqube-mcp`: `.mcp/server.json` follows the `2025-12-11` schema, names the NuGet registry by its only accepted base URL (`https://api.nuget.org/v3/index.json`), keeps `description` within the registry's 100 characters (`McpServerManifestTests` asserts all three), and the packed README carries the `mcp-name:` ownership marker the registry checks inside the published version. Publishing to the registry is not automated yet; when it is, the GitHub OIDC exchange belongs in the build, like the NuGet one. |
 | D18 | **Paging is `p`/`ps`, and there are no cursors.** SonarQube's paging is a pair of integers; there is nothing opaque to encode, so inventing a cursor would add an SSRF surface (a model-supplied URL to validate) for no benefit. `ToolDefaults.ResolvePaging` clamps `pageSize` to `SONARQUBE_MCP_MAX_PAGE_SIZE` silently and enforces the API's 10,000-result cap **before the request leaves the process**, turning `Can return only the first 10000 results` into an instruction to narrow the search. Every paginated result carries the same envelope: `page`, `pageSize`, `totalCount`, `hasMore`, `note?`. |
 | D19 | **`organization` comes from `SONARQUBE_ORG` and is never a tool parameter.** One organization per server instance is the normal case; a model cannot discover an org key it was not told, and a wrong one is an opaque 400. Two organizations means two server entries in the client configuration, which is one line of JSON. `ToolDefaults.RequireOrganization` throws an `McpException` naming the variable and explaining that it is the `/organizations/{key}` segment of the URL. |
 | D20 | **`projectKey` is optional everywhere, defaulted from `SONARQUBE_MCP_DEFAULT_PROJECT`.** An MCP server is configured per checkout in practice, and the Sonar project key is not guessable from the directory name — pinning it in the environment removes the single most common source of 404s. Neither set is an `McpException` naming the variable and pointing at `listProjects`. |
@@ -73,10 +73,10 @@ to audit — treat that as a hard constraint, not a preference.
 | D23 | **Read-only mode is the absence of a registration.** `SONARQUBE_MCP_READ_ONLY` makes `McpServerSetup.ToolTypesFor` return three tool classes instead of four, so the five write tools never appear in `tools/list`. It is not a check inside a tool: a model must not be able to propose a call the server would then refuse. `SmokeTest`'s second leg is the end-to-end proof. |
 | D24 | **Writes are `application/x-www-form-urlencoded` `ByteArrayContent`**, built by `Http/FormBody.cs` — deliberately not `FormUrlEncodedContent`. `RetryHandler.IsResendable` recognises `ByteArrayContent`, which is exactly what makes a write replayable after a 429. SonarQube rejects a JSON body and ignores query parameters on these endpoints, so this is also the only encoding that works. |
 | D25 | **Measures are strings, absence is not zero, and ratings are letters.** Every measure value arrives as a string, including for `INT` and `PERCENT`; new-code numbers live in `periods[0].value` and never in `value`; a metric with no data is *silently omitted* from the response. `MeasureFormatting` therefore lifts `newCodeValue` out of the period, translates `*_rating` `"1.0"`–`"5.0"` to `A`–`E`, and diffs what was asked for against what came back into `missingMetrics`. A model reading an absent `coverage` as 0% instead of "not measured" draws the opposite conclusion from the truth. |
-| D26 | **Rule and hotspot prose is HTML, converted by hand, and truncation is visible.** `getRule` reads `rules/search?rule_key=…&f=descriptionSections` (C1 — `rules/show` has no `f` on Cloud), and `HtmlToText` (~90 lines, no dependency) unescapes entities, fences `<pre><code>`, bullets `<li>`, breaks on `<p>`/`<h*>`/`<br>` and drops the rest. Sections are capped at `ToolDefaults.MaxRuleSectionChars` with a visible marker and a `truncated` flag on the result. Sections are returned in the order they were *asked for*, not the order the API listed them, and one key can appear more than once — a per-framework rule answers `how_to_fix` once per `context`, which is the only thing telling the copies apart. A response with no sections at all means the request went out without a credential (see *API gotchas*) and is reported as a `note`, not as an error. |
+| D26 | **Rule and hotspot prose is HTML, converted by hand, and truncation is visible.** `getRule` reads `rules/search?rule_key=…&f=descriptionSections` (C1 — `rules/show` has no `f` on Cloud), and `HtmlToText` (~90 lines, no dependency) unescapes entities, fences `<pre><code>`, bullets `<li>`, breaks on `<p>`/`<h*>`/`<br>` and drops the rest. Sections are capped at `ToolDefaults.MaxRuleSectionChars` with a visible marker and a `truncated` flag on the result. Sections are returned in the order they were *asked for*, not the order the API listed them, and one key can appear more than once — a per-framework rule answers `how_to_fix` once per `context`, which is the only thing telling the copies apart. Each section carries the variant's `contextKey`, an issue carries the one that applies to it as `ruleContext` (C15), and `getRule`'s `context` argument keeps only that variant; a context the rule does not document filters nothing and the note names the ones it does. A response with no sections at all means the request went out without a credential (see *API gotchas*) and is reported as a `note`, not as an error. |
 
 | D27 | **A key filter is scoped, so a single-entity read has to name its project.** SonarQube Cloud only honours `issues/search`'s `issues=` filter inside the scope named by `componentKeys`; supply a key and `pullRequest` and nothing else and the scope argument is *silently* dropped, the search runs against the main branch, and the answer is `200` with `total: 0` (C13). `getIssue` therefore takes an optional `projectKey`, defaulted from `SONARQUBE_MCP_DEFAULT_PROJECT`, and sends it as `componentKeys` whenever one resolves — harmless unscoped, load-bearing scoped. `ToolDefaults.ResolveScopedProject` refuses a scoped lookup it cannot name a project for **before the request is sent**, because the alternative is reporting a real issue as missing. Main-branch reads with no project configured keep working, because those genuinely do. |
-| D28 | **Aggregation is its own tool, not a parameter.** `summarizeIssues` exists rather than a `facets` argument on `searchIssues` for two reasons: `searchIssues` already carries eighteen parameters and every one of them is read on every call, and the two tools answer different questions — one returns issues and pages, the other returns whole-result counts and cannot page. Keeping them apart is also what lets `ToolSchemaTests` assert that `summarizeIssues` carries **none** of the paging envelope, which would otherwise invite a second request that returns identical counts. Its `matchingIssues` is deliberately not called `totalCount`: that name is the envelope's. |
+| D28 | **Aggregation is its own tool, not a parameter.** `summarizeIssues` exists rather than a `facets` argument on `searchIssues` for two reasons: `searchIssues` already carries twenty parameters and every one of them is read on every call, and the two tools answer different questions — one returns issues and pages, the other returns whole-result counts and cannot page. Keeping them apart is also what lets `ToolSchemaTests` assert that `summarizeIssues` carries **none** of the paging envelope, which would otherwise invite a second request that returns identical counts. Its `matchingIssues` is deliberately not called `totalCount`: that name is the envelope's. |
 | D29 | **`bulkUpdateIssues` exposes transition, assignment and comment, and nothing else.** `issues/bulk_change` also offers `set_severity` and `set_type`, which speak the legacy vocabulary D22 rejects at the tool boundary, and `add_tags`/`remove_tags`, which have no single-issue counterpart in this server — exposing tag writing only in the bulk tool would leave the surface asymmetric, and a model would reach for it to do things one issue at a time. The response is four counts naming no issue, so `ignored` and `failed` are reported as counts with a pointer to `getIssue` rather than attributed to keys this server cannot identify. |
 | D30 | **`getAnalysisStatus` reports, and never waits.** It is one call that returns the queue and the last finished task; it does not poll, sleep or retry until an analysis completes. A tool that blocked for the length of a Compute Engine run would hold the client's request open for minutes with no progress channel and no way to cancel meaningfully, and the client is in a far better position to decide how long to wait and what to do meanwhile. It is annotated `ReadOnly`/`Idempotent` — which is a claim about *effects*, not about a stable answer; that its answer changes between calls is the entire point, and the description says so. `ce/activity` (401 anonymously, project-admin with a token) and `ce/activity_status` (403) are out of the budget. |
 
@@ -192,11 +192,11 @@ nothing checked that it had been, so a new tool silently had no frozen schema.
 `EveryToolHasARowInTheFrozenSchemaTable` closes that, and the list below is now the whole set:
 
 1. The *Tool table* above.
-2. `ToolInventoryTests.ExpectedToolNames`, plus its annotation table (title, and the read or write
-   theory).
+2. `ToolInventoryTests.ExpectedToolNames`, plus its annotation tables (title, and the read or write
+   `[TestCase]` table).
 3. `ToolSchemaTests`' `InputSchemaExposesExactlyTheModelSuppliedArguments` table — the frozen
    parameter list, in declaration order — and either the paginated or the unpaginated paging
-   theory. A tool in neither paging theory is not a failure, but it should be in one of them.
+   table. A tool in neither paging table is not a failure, but it should be in one of them.
 4. `Build.cs`'s `ExpectedToolNames`, which `SmokeTest` checks against a live `tools/list`.
 5. `.claude/skills/sonarqube-code-quality/SKILL.md`, in backticks, inside a playbook —
    `AgentSkillTests` fails on a tool the skill never mentions as well as on a name no tool answers
@@ -253,6 +253,29 @@ from the fixture manifest.
   tool that sends a path safe to call with either spelling.
 - **`ComponentDto` needs both `id` and `uuid`.** Same value, two names: the measures endpoints send
   `id`, everything else sends `uuid`.
+- **C14 — `api/qualitygates/project_status` is deprecated** (since 16 September 2025, with no v2
+  successor), so `getQualityGateStatus` reads `measures/component` with
+  `metricKeys=alert_status,quality_gate_details` instead. The verdict is the `alert_status` value; the
+  conditions are **JSON inside `quality_gate_details`'s string value**, with field names of their own
+  (`metric`, `op`, `period`, `error`, `actual`, `level`). An ungated scope has neither measure, and
+  that absence is NONE. Compared on 2026-11-18 against `project_status` for `quartznet_quartznet`
+  pull request 4358 (four identical conditions) and its ungated main branch (`NONE` versus no
+  measures).
+- **C15 — `ruleDescriptionContextKey` is an opt-in field.** It is one of `issues/search`'s
+  `additionalFields` values, and without it no issue carries the key, framework-specific rule or
+  not: 0 of 20 `javasecurity` issues in the `apache` organization did, against 16 of 20 with it
+  (verified 2026-11-18). `searchIssues` and `getIssue` ask for it.
+- **Security hotspots are deprecated** (16 June 2026: "replaced by security issues (software
+  quality) and vulnerabilities (type)"). SonarQube Cloud bulk-migrates them into issues tagged
+  `former-hotspot`, after which `hotspots/*` answers with nothing for that project, and drops the
+  endpoints 180 days later; statuses map TO_REVIEW to open, ACKNOWLEDGED to confirmed, FIXED to fixed
+  and SAFE to accepted. `searchHotspots` therefore notes an empty result rather than reporting "no
+  security findings", and the three hotspot tools are removed once a migrated project answers empty
+  (`quartznet_quartznet` still had five `TO_REVIEW` hotspots and no `former-hotspot` issue on
+  2026-11-18).
+- **An issue reports its own scope**: `issues/search` puts `branch` or `pullRequest` on each issue of
+  a non-main scope. `transitionIssue` re-reads an issue through that scope when `do_transition`'s
+  response carries no transitions, because the key alone falls into C13.
 
 **Values and parameters**
 
@@ -329,6 +352,21 @@ from the fixture manifest.
   `ignored`, `failures`). A transition that is not legal from an issue's current state lands in
   `ignored` and does **not** fail the call — so a bulk change that did nothing at all is still a
   `200`. It caps `issues` at 500.
+- **C16 — `author` is repeated, never comma-joined**, unlike every other list this server sends
+  (`SonarRequestBuilder.QueryEach` versus `QueryList`). Its catalogue entry says "the parameter must be
+  called once for each value", and the comma form is read as **one literal author**: two authors with
+  44 and 2 issues answered 46 repeated and 0 comma-joined (verified 2026-11-18). An anonymous request
+  is not told authors — the `author` facet comes back empty and issues carry no `author` — but the
+  filter still applies.
+- **`fixableByAgent` is undocumented, and only `true` filters.** The catalogue's changelog says it was
+  added (20 April 2026) and its parameter list omits it, a C5 case; probed, `true` kept 796 of 5,258
+  issues and `false` kept all of them. The tools send it only for `true`.
+- **Rating keys come in two shapes.** `*_rating`, and the dependency-risk ratings' `sca_rating_*` and
+  `new_sca_rating_*`. A bare `_rating_` infix would also catch `effort_to_reach_maintainability_rating_a`,
+  which is a work duration; `MeasureFormatting.IsRating` matches exactly the RATING metrics of the
+  2026-11-18 catalogue.
+- **`facetMode` is deprecated** (since 7.9) yet still honoured; `summarizeIssues` sends it for
+  `countBy=effort`, and is the first thing to look at if effort counts stop arriving.
 
 **Errors and transport**
 
@@ -452,8 +490,9 @@ Complete, as of the initial implementation. Versions are centrally pinned in
   **Three, not the template's four**: `System.Security.Cryptography.ProtectedData` is deliberately
   absent, because a static token read from the environment (D13) means there is no token cache, and
   no token cache means nothing to encrypt at rest.
-- `tests/`: `xunit.v3`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`. No mocking or
-  assertion libraries — use the hand-rolled `StubHttpMessageHandler`.
+- `tests/`: `NUnit` and `NUnit3TestAdapter`, whose Microsoft.Testing.Platform runner brings the
+  platform packages in transitively. No mocking or assertion libraries — use the hand-rolled
+  `StubHttpMessageHandler`.
 - `build/`: `Fallout.Common` + `Fallout.Components` 10.5.0, and nothing pinned beside them (see
   *Package budget changes*). The build project opts out of CPM.
 
@@ -481,7 +520,8 @@ Fallout 10.5.0 brought 7.9.0 in on its own (below).
   VSTest mode is D11's whole interface: Fallout's `ITest` drives the run through VSTest loggers and
   parses the result against the VSTest schema, so the bump would quietly degrade CI reporting to
   pass-or-fail with no error text. Revisit when Fallout's `ITest` speaks the
-  Microsoft.Testing.Platform protocol.
+  Microsoft.Testing.Platform protocol. Superseded on 2026-11-18, when the suite left xunit and
+  `ITest` altogether (below).
 - **Fallout 11.0.18.** The premise is inverted: `11.0.x` is the **edge** channel and `10.4.0` is
   stable and functionally newer. It also would not compile — `GitHubActionsAttribute.Env` is used at
   `build/Build.CI.GitHubActions.cs:45` and does not exist in 11.0.18 — and it would regenerate both
@@ -511,6 +551,16 @@ case-sensitively (#1934). `Microsoft.Extensions.DependencyInjection` and
 `Microsoft.Extensions.Logging.Console` 10.0.12 to **10.0.15**, deliberately not 11.0.0: the 11.x
 packages target net10.0 too, but they would pull the 11.x abstractions in as packages, while the
 10.0 servicing line is the one that matches the target framework (D32).
+
+**2026-11-18 — the tests move to NUnit 5 on Microsoft.Testing.Platform.** `xunit.v3`,
+`xunit.runner.visualstudio` and `Microsoft.NET.Test.Sdk` out; `NUnit` 5.0.0 and `NUnit3TestAdapter`
+6.3.1 in, with the adapter's MTP runner enabled. The restored test graph goes from 40 packages to 30,
+and everything beyond the two references arrives through the adapter (the platform, its VSTest
+bridge and its telemetry extension). Nothing else was added: no TRX or GitHub reporter, so CI reports
+the runner's own console output and exit code rather than a parsed TRX. The 2026-09-09 reason for
+holding xunit at 3.x — `ITest`'s VSTest reporting — went with `ITest` itself (D11). The move kept every
+test: 637 run and 2 skipped before and after, the same 372 method names and the same count per class,
+and a deliberately broken assertion failed the run.
 
 The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
 `Fallout.Common` as a transitive dependency — no new `PackageReference` anywhere, and
@@ -583,24 +633,30 @@ abort the build.
 ## Testing
 
 ```powershell
-.\build.ps1 Test                                   # the whole suite, via the orchestrator
-dotnet test tests\SonarQube.Mcp.Tests               # the same tests, without a publish
-dotnet test tests\SonarQube.Mcp.Tests --filter "FullyQualifiedName~Measure"
+.\build.ps1 Test                                            # the whole suite, via the orchestrator
+dotnet test --project tests\SonarQube.Mcp.Tests             # the same tests, without a publish
+dotnet test --project tests\SonarQube.Mcp.Tests --filter "FullyQualifiedName~Measure"
+$env:SONARQUBE_MCP_LIVE_TESTS='1'; dotnet test --project tests\SonarQube.Mcp.Tests --filter "TestCategory=Live"
 ```
 
-xunit.v3 with the `xunit.runner.visualstudio` VSTest bridge (D11). No mocking or assertion
-libraries: HTTP is faked with the hand-rolled `StubHttpMessageHandler`, the retry schedule runs on a
+NUnit 5 on Microsoft.Testing.Platform (D11). A failing test exits 2 and a run that finds no test
+exits 8. NUnit's `Does.Contain` and `Does.StartWith` compare by culture, so string checks say
+`Contains.Substring(x).Using(StringComparison.Ordinal)` or `.Using(...)` explicitly; keep it that
+way, because a culture-sensitive match on a key or a URL is a test that can pass for the wrong
+reason. No mocking or assertion libraries: HTTP is faked with the hand-rolled `StubHttpMessageHandler`, the retry schedule runs on a
 manual `TimeProvider`, and fixtures are embedded resources captured live from sonarcloud.io with
 their provenance recorded in `Fixtures/MANIFEST.md` (JSON cannot carry comments, so the manifest is
 where a capture's URL and date live). Because `JsonSerializerIsReflectionEnabledByDefault=false` is
 set in the test csproj as well (D7), a type missing from a `JsonSerializerContext` fails under
 `dotnet test` rather than only after an AOT publish.
 
-Almost every fixture comes from `quartznet_quartznet`. **Three do not**, and the reason is worth
+Almost every fixture comes from `quartznet_quartznet`. **Five do not**, and the reason is worth
 knowing before anyone tidies them: that project publishes no coverage report, so no request against
-it can produce a `lineHits`, a `conditions` or a coverage-ranked component tree. The three
-coverage-bearing shapes were captured anonymously from the public `apache_creadur-rat` instead. They
-are response bodies, so the foreign project key inside them is data and nothing in the code notices.
+it can produce a `lineHits`, a `conditions` or a coverage-ranked component tree, and it has no
+failing pull request left and no Java code for a rule that documents its fix per framework. The three
+coverage-bearing shapes and the red quality gate were captured anonymously from the public
+`apache_creadur-rat` instead, and the rule-context issue from `jspwiki-builder`. They are response
+bodies, so the foreign project key inside them is data and nothing in the code notices.
 
 Some rules are too easy to break silently to be left to review, so tests enforce them by reflection
 or by scanning the source tree. Do not delete one to make a change pass:

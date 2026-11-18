@@ -114,59 +114,59 @@ Lands first and alone: it fixes the build-only advisories even if nothing else s
 ## Phase 3: Package refresh
 
 - [x] `Directory.Packages.props`, app group: `ModelContextProtocol` `[2.4.0]` (stays an exact pin), and `Microsoft.Extensions.DependencyInjection` / `Logging.Console` 10.0.15. That's the TFM's servicing line; 11.0.0 would drag the 11.x abstractions in as packages.
-- [ ] MCP SDK behaviour to pin down with tests (written in NUnit, after Phase 3b):
-  - 2.4.0 matches protocol property names case-sensitively (#1934). Add a test that a mis-cased argument does not silently bind.
+- [x] MCP SDK behaviour to pin down with tests (written in NUnit, after Phase 3b):
+  - 2.4.0 matches protocol property names case-sensitively (#1934). **Probed instead of tested:** over stdio, a mis-cased tool argument is not bound on 2.2.0 or on 2.4.0, so the upgrade changes nothing there. The gap itself (an opaque error for a required argument, silence for an optional one) is task `73qv`.
   - Since 2.3.0, `tools/list` keeps registration order. `SmokeTest` compares sets, so nothing depends on order; leave it that way.
 - [x] Verify: Test plus SmokeTest on the CI path.
 
 ## Phase 3b: NUnit on Microsoft.Testing.Platform
 
-- [ ] `global.json`: `"test": { "runner": "Microsoft.Testing.Platform" }`.
-- [ ] Test packages: `NUnit` 5.0.0 and `NUnit3TestAdapter` 6.3.1 (`EnableNUnitRunner`) replace `xunit.v3`, `xunit.runner.visualstudio` and `Microsoft.NET.Test.Sdk`. Still no mocking or assertion libraries.
-- [ ] Convert every test to NUnit's constraint model, with the same class and test names and the same count (637 run, 2 skipped).
+- [x] `global.json`: `"test": { "runner": "Microsoft.Testing.Platform" }`.
+- [x] Test packages: `NUnit` 5.0.0 and `NUnit3TestAdapter` 6.3.1 (`EnableNUnitRunner`) replace `xunit.v3`, `xunit.runner.visualstudio` and `Microsoft.NET.Test.Sdk`. Still no mocking or assertion libraries.
+- [x] Convert every test to NUnit's constraint model, with the same class and test names and the same count (637 run, 2 skipped).
   - `[assembly: FixtureLifeCycle(LifeCycle.InstancePerTestCase)]` keeps xunit's one-instance-per-test semantics.
   - The live-test gate becomes `Assert.Ignore`.
-- [ ] `build/Build.cs`: drop `ITest`. A hand-written `Test` target runs `dotnet test --project` after `Compile` and fails on a non-zero exit. The target name stays `Test`, so the generated workflows don't change.
-- [ ] AGENTS.md: rewrite D11 and *Testing*, the `tests/` budget line, and a *Package budget changes* entry for the swap. That entry retires the 2026-09-09 reasoning for holding xunit at 3.x.
-- [ ] Verify: `dotnet test --project tests/SonarQube.Mcp.Tests`, then `dotnet fallout Test SmokeTest` plainly and on the CI path.
+- [x] `build/Build.cs`: drop `ITest`. A hand-written `Test` target runs `dotnet test --project` after `Compile` and fails on a non-zero exit. The target name stays `Test`. **Deviation:** `publish.yml` regenerates without its `test-results` upload step, since there's no TRX any more; `build.yml` is unchanged.
+- [x] AGENTS.md: rewrite D11 and *Testing*, the `tests/` budget line, and a *Package budget changes* entry for the swap. That entry retires the 2026-09-09 reasoning for holding xunit at 3.x.
+- [x] Verify: `dotnet test --project tests/SonarQube.Mcp.Tests`, then `dotnet fallout Test SmokeTest` plainly and on the CI path.
 
 ## Phase 4a: Deprecations and correctness
 
-- [ ] **`getQualityGateStatus` reads `measures/component`** with `metricKeys=alert_status,quality_gate_details` and the same branch/pullRequest scope. Name and `QualityGateResult` stay; the mapping is field for field.
+- [x] **`getQualityGateStatus` reads `measures/component`** with `metricKeys=alert_status,quality_gate_details` and the same branch/pullRequest scope. Name and `QualityGateResult` stay; the mapping is field for field.
   - `quality_gate_details` is JSON inside a string: a second source-generated `Deserialize`, no converter (D6, D7).
   - An absent measure means `NONE` with the existing note (D25).
   - Remove `GetQualityGateProjectStatusAsync`, `ProjectStatusResponseDto` and their fixture and contract rows, unless a test still needs the old shape.
   - Capture the new fixtures live (a PR scope and a `NONE` scope), with `Fixtures/MANIFEST.md` rows.
   - Add an *API gotchas* entry with the deprecation date and the probe.
-- [ ] **Hotspots are being retired.**
+- [x] **Hotspots are being retired.**
   - Reword `ServerInstructions.cs:32` and `SKILL.md:109`, which say hotspots never appear in `searchIssues`. After migration they do, tagged `former-hotspot`.
   - An empty `searchHotspots` result gets a `note` pointing to `searchIssues` with `tags=former-hotspot` and `impactSoftwareQualities=SECURITY`.
-  - The three hotspot tool descriptions say the endpoints are deprecated.
+  - The `searchHotspots` and `setHotspotStatus` descriptions say so (`getHotspot` takes a key from `searchHotspots`, so it gains nothing).
   - Record the dates and the status mapping in *API gotchas*.
   - Removing the three tools is **not** part of 1.2.0. It happens when the endpoints come back empty for a migrated project (23 → 20 tools, 5 → 4 writes, every count and both SmokeTest legs).
-- [ ] **SCA ratings become letters.** `MeasureFormatting` translates only keys ending `_rating`, so the ten `sca_rating_*` / `new_sca_rating_*` metrics reach the model as `"1.0"`–`"5.0"` (D25). Match the `_rating_` infix as well (or decide by metric type), with a unit test.
-- [ ] **`transitionIssue`'s fallback re-read is unscoped** (`IssueWriteTools.cs:252–271`). It sends `issues=KEY` alone, the C13 trap, so `availableTransitions` silently comes back null for a pull-request issue. Pass the project and scope through, or return a note naming `getIssue`, and add a PR-scoped test next to `ToolBehaviourTests.cs:2029`.
-- [ ] AGENTS.md *API gotchas*: `facetMode` (sent by `summarizeIssues` `countBy=effort`) has been deprecated since 7.9; note it.
+- [x] **SCA ratings become letters.** `MeasureFormatting` translates only keys ending `_rating`, so the ten `sca_rating_*` / `new_sca_rating_*` metrics reach the model as `"1.0"`–`"5.0"` (D25). **Deviation:** the rule matches `sca_rating_`, not a bare `_rating_` infix, because `effort_to_reach_maintainability_rating_a` is a work duration (checked against the live catalogue).
+- [x] **`transitionIssue`'s fallback re-read is unscoped** (`IssueWriteTools.cs:252–271`). It sends `issues=KEY` alone, the C13 trap, so `availableTransitions` silently comes back null for a pull-request issue. Pass the project and scope through, or return a note naming `getIssue`, and add a PR-scoped test next to `ToolBehaviourTests.cs:2029`.
+- [x] AGENTS.md *API gotchas*: `facetMode` (sent by `summarizeIssues` `countBy=effort`) has been deprecated since 7.9; note it.
 
 ## Phase 4b: Small additions (only if decision 2 says so)
 
 Every item touches the frozen schema table in `ToolSchemaTests` and `ApiParameterContractTests`' `SonarApiParameters.Table`, and, where it changes what a model should do, the skill and README.
 
-- [ ] `fixableByAgent` (bool) on `searchIssues` and `summarizeIssues`. It's undeclared in the catalogue, so add it to `UndocumentedButVerified`. Probed: `true` gives 796 of 5,258 issues, while `false` doesn't filter at all; the description must say both.
-- [ ] `ruleContext` on issue results (from `ruleDescriptionContextKey`, already deserialised and dropped), plus a `context` argument on `getRule` that keeps only the matching `how_to_fix` section (D26).
-- [ ] An `authors` filter on `searchIssues`, and `author` on the issue result. The scenario is "the issues I introduced". Anonymous responses omit `author`, so the description says it needs a token.
-- [ ] `summarizeIssues` `groupBy` gains the security-standard facets (`owaspTop10-2021`, `cwe`, `sonarsourceSecurity`). That's a new value, not a new parameter. These grow in importance as hotspots become issues.
+- [x] `fixableByAgent` (bool) on `searchIssues` and `summarizeIssues`. It's undeclared in the catalogue, so add it to `UndocumentedButVerified`. Probed: `true` gives 796 of 5,258 issues, while `false` doesn't filter at all; the description must say both.
+- [x] `ruleContext` on issue results (from `ruleDescriptionContextKey`, already deserialised and dropped), plus a `context` argument on `getRule` that keeps only the matching `how_to_fix` section (D26). **Found on the way (C15):** the field arrives only with `additionalFields=ruleDescriptionContextKey`, so `searchIssues` and `getIssue` now ask for it.
+- [x] An `authors` filter on `searchIssues` (and `summarizeIssues`), and `author` on `getIssue`'s result only, to keep list rows small. The scenario is "the issues I introduced". Anonymous responses omit `author`, so the description says it needs a token. **Found on the way (C16):** `author` must be sent repeated; comma-joined it matches nothing.
+- [x] `summarizeIssues` `groupBy` gains the security-standard facets (`owaspTop10-2021`, `cwe`, `sonarsourceSecurity`). That's a new value, not a new parameter. These grow in importance as hotspots become issues.
 
 ## Phase 5: MCP Registry readiness
 
 The registry reads the README of the version being published, so the marker has to ship inside a package. 1.2.0 carries the manifest fixes; the publishing itself follows.
 
-- [ ] `.mcp/server.json`:
+- [x] `.mcp/server.json`:
   - `$schema` → `2025-12-11`;
   - `registryBaseUrl` → `https://api.nuget.org/v3/index.json`;
   - `description` at most 100 characters.
-- [ ] `McpServerManifestTests` asserts those three.
-- [ ] `README.md`: `<!-- mcp-name: io.github.lahma/sonarqube-mcp -->`. It's packed into the nupkg.
+- [x] `McpServerManifestTests` asserts those three.
+- [x] `README.md`: `<!-- mcp-name: io.github.lahma/sonarqube-mcp -->`. It's packed into the nupkg.
 - [ ] *Follow-up, shared with bitbucket-mcp; not in 1.2.0:* a `PublishMcpRegistry` target that does the GitHub OIDC → registry token exchange in C# inside the build, the way D17's NuGet exchange works, rather than downloading `mcp-publisher`. It waits until nuget.org serves the version, then publishes. Verify the registry's auth and publish endpoints against its source before writing it. Registry versions are immutable and the registry is still a preview. Until then a first listing can be done by hand with `mcp-publisher`.
 
 ## Phase 6: RID-specific AOT tool packages (a separate plan, 1.3.0)

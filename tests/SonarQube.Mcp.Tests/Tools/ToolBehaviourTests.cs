@@ -354,10 +354,14 @@ public class ToolBehaviourTests
             Is.EqualTo("https://sonarcloud.io/project/overview?id=quartznet_quartznet&pullRequest=3267"));
     }
 
+    /// <summary>
+    /// C14: the gate is read from the two gate measures, not from the deprecated
+    /// qualitygates/project_status, and an ungated scope simply has neither measure.
+    /// </summary>
     [Test]
     public async Task AQualityGateWithNoVerdictYetIsExplainedRatherThanReportedAsAFailure()
     {
-        using var handler = Stub("qualitygates-project-status-none.json");
+        using var handler = Stub("measures-component-quality-gate-none.json");
         using var client = ToolTestHost.CreateClient(handler);
 
         var result = await ProjectReadTools.GetQualityGateStatusAsync(
@@ -365,6 +369,9 @@ public class ToolBehaviourTests
             ToolTestHost.CreateOptions(),
             cancellationToken: TestContext.CurrentContext.CancellationToken);
 
+        Assert.That(Path(handler), Is.EqualTo("/api/measures/component"));
+        Assert.That(Query(handler, "component"), Is.EqualTo(Project));
+        Assert.That(Query(handler, "metricKeys"), Is.EqualTo("alert_status,quality_gate_details"));
         Assert.That(result.Status, Is.EqualTo("NONE"));
         Assert.That(result.Conditions, Is.Empty);
         Assert.That(result.Note, Is.Not.Null);
@@ -374,30 +381,86 @@ public class ToolBehaviourTests
     [Test]
     public async Task AFailingGateArrivesWithItsFailuresAlreadyFilteredAndItsRatingsAsLetters()
     {
-        using var handler = Stub("qualitygates-project-status-error.json");
+        using var handler = Stub("measures-component-quality-gate-error.json");
         using var client = ToolTestHost.CreateClient(handler);
 
         var result = await ProjectReadTools.GetQualityGateStatusAsync(
             client,
             ToolTestHost.CreateOptions(),
-            pullRequest: "3267",
+            projectKey: "apache_creadur-rat",
+            pullRequest: "749",
             cancellationToken: TestContext.CurrentContext.CancellationToken);
 
-        Assert.That(Query(handler, "pullRequest"), Is.EqualTo("3267"));
+        Assert.That(Query(handler, "pullRequest"), Is.EqualTo("749"));
+        Assert.That(Query(handler, "branch"), Is.Null);
         Assert.That(result.Status, Is.EqualTo("ERROR"));
-        Assert.That(result.Conditions.Count, Is.EqualTo(5));
-        Assert.That(result.FailingConditions.Count, Is.EqualTo(2));
+        Assert.That(result.Conditions.Count, Is.EqualTo(6));
+        Assert.That(
+            result.FailingConditions.Select(condition => condition.Metric),
+            Is.EqualTo<string?[]>(["new_reliability_rating", "new_security_rating", "new_coverage"]));
 
         var rating = result.FailingConditions[0];
 
-        Assert.That(rating.Metric, Is.EqualTo("new_reliability_rating"));
         Assert.That(rating.Threshold, Is.EqualTo("A"));
-        Assert.That(rating.ActualValue, Is.EqualTo("B"));
+        Assert.That(rating.ActualValue, Is.EqualTo("D"));
+        Assert.That(rating.Comparator, Is.EqualTo("GT"));
+        Assert.That(rating.Status, Is.EqualTo("ERROR"));
         Assert.That(rating.OnNewCode, Is.True);
+        Assert.That(result.FailingConditions[1].ActualValue, Is.EqualTo("E"));
 
         // A non-rating metric keeps the number SonarQube sent.
-        Assert.That(result.FailingConditions[1].ActualValue, Is.EqualTo("4.8"));
+        Assert.That(result.FailingConditions[2].Threshold, Is.EqualTo("80"));
+        Assert.That(result.FailingConditions[2].ActualValue, Is.EqualTo("35.3"));
         Assert.That(result.Note, Is.Null);
+    }
+
+    /// <summary>
+    /// The C14 equivalence, from the pull request it was verified on: the verdict comes from
+    /// alert_status, the four conditions from the JSON inside quality_gate_details.
+    /// </summary>
+    [Test]
+    public async Task APassingPullRequestGateCarriesEveryConditionAndNoFailures()
+    {
+        using var handler = Stub("measures-component-quality-gate-pr.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await ProjectReadTools.GetQualityGateStatusAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            pullRequest: "4358",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(result.Status, Is.EqualTo("OK"));
+        Assert.That(result.PullRequest, Is.EqualTo("4358"));
+        Assert.That(result.FailingConditions, Is.Empty);
+        Assert.That(
+            result.Conditions.Select(condition => condition.Metric),
+            Is.EqualTo<string?[]>([
+                "new_reliability_rating", "new_security_rating", "new_maintainability_rating",
+                "new_security_hotspots_reviewed",
+            ]));
+        Assert.That(result.Conditions[3].ActualValue, Is.EqualTo("100.0"));
+        Assert.That(result.Note, Is.Null);
+    }
+
+    [Test]
+    public async Task GateDetailsThatAreNotJsonAreReportedAsAnUnreadableResponse()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson("""
+            {"component":{"key":"quartznet_quartznet","measures":[
+              {"metric":"alert_status","value":"OK"},
+              {"metric":"quality_gate_details","value":"not json"}]}}
+            """);
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<McpException>(() =>
+            ProjectReadTools.GetQualityGateStatusAsync(
+                client,
+                ToolTestHost.CreateOptions(),
+                cancellationToken: TestContext.CurrentContext.CancellationToken));
+
+        Assert.That(exception!.Message, Contains.Substring("quality_gate_details").Using(StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -421,10 +484,67 @@ public class ToolBehaviourTests
 
         // Always sent: the sidecar the file-path join needs, and never _all, which drags a
         // fifty-element languages array onto every response.
-        Assert.That(Query(handler, "additionalFields"), Is.EqualTo("rules"));
+        // ruleDescriptionContextKey is opt-in (C15): without it no issue says which variant of its
+        // rule's fix guidance applies.
+        Assert.That(Query(handler, "additionalFields"), Is.EqualTo("rules,ruleDescriptionContextKey"));
+        Assert.That(Names(handler), Does.Not.Contain("author"));
+        Assert.That(Names(handler), Does.Not.Contain("fixableByAgent"));
 
         Assert.That(Query(handler, "s"), Is.EqualTo("CREATION_DATE"));
         Assert.That(Query(handler, "asc"), Is.EqualTo("false"));
+    }
+
+    /// <summary>
+    /// C16: author is the one list SonarQube wants repeated - comma-joined it is read as a single
+    /// literal author and matches nothing.
+    /// </summary>
+    [Test]
+    public async Task AuthorsAreSentOnePerParameterAndFixableByAgentOnlyWhenTrue()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(SonarFixtures.Read("issues-search-empty.json"));
+        handler.EnqueueJson(SonarFixtures.Read("issues-search-empty.json"));
+        using var client = ToolTestHost.CreateClient(handler);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            authors: ["ada@example.com", " bob@example.com "],
+            fixableByAgent: true,
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        _ = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            fixableByAgent: false,
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var authors = RequestUrl.Query(handler.Requests[0].Uri)
+            .Where(pair => pair.Key == "author")
+            .Select(pair => pair.Value);
+
+        Assert.That(authors, Is.EqualTo<string[]>(["ada@example.com", "bob@example.com"]));
+        Assert.That(Query(handler, "fixableByAgent"), Is.EqualTo("true"));
+
+        // false filters nothing on the API side, so it is not sent at all.
+        Assert.That(Names(handler, 1), Does.Not.Contain("fixableByAgent"));
+    }
+
+    [Test]
+    public async Task AnIssueSaysWhichVariantOfItsRulesFixGuidanceApplies()
+    {
+        using var handler = Stub("issues-search-rule-context.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SearchIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            projectKey: "jspwiki-builder",
+            rules: ["javasecurity:S5131"],
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(result.Issues[0].Rule, Is.EqualTo("javasecurity:S5131"));
+        Assert.That(result.Issues[0].RuleContext, Is.EqualTo("jsp"));
     }
 
     [Test]
@@ -712,7 +832,9 @@ public class ToolBehaviourTests
 
         Assert.That(Path(handler), Is.EqualTo("/api/issues/search"));
         Assert.That(Query(handler, "issues"), Is.EqualTo(IssueKey));
-        Assert.That(Query(handler, "additionalFields"), Is.EqualTo("transitions,comments,rules,users"));
+        Assert.That(
+            Query(handler, "additionalFields"),
+            Is.EqualTo("transitions,comments,rules,users,ruleDescriptionContextKey"));
         Assert.That(Query(handler, "ps"), Is.EqualTo("1"));
 
         Assert.That(result.Key, Is.EqualTo(IssueKey));
@@ -942,6 +1064,67 @@ public class ToolBehaviourTests
         Assert.That(
             result.Sections.Select(section => section.Context),
             Is.EqualTo<string?[]>(["Java Lang Package", "Apache Commons"]));
+        Assert.That(
+            result.Sections.Select(section => section.ContextKey),
+            Is.EqualTo<string?[]>(["java_lang_package", "apache_commons"]));
+    }
+
+    [Test]
+    public async Task GetRuleWithAnIssuesContextKeepsOnlyThatVariant()
+    {
+        using var handler = Stub("rules-search-with-contexts.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "javasecurity:S2076",
+            sections: ["root_cause", "how_to_fix"],
+            context: "apache_commons",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        // Sections without a context are kept; of the per-framework ones only the asked-for one is.
+        Assert.That(
+            result.Sections.Select(section => section.Key),
+            Is.EqualTo<string?[]>(["root_cause", "how_to_fix"]));
+        Assert.That(result.Sections[1].ContextKey, Is.EqualTo("apache_commons"));
+        Assert.That(result.Note, Is.Null);
+    }
+
+    [Test]
+    public async Task AContextTheRuleDoesNotDocumentFiltersNothingAndNamesTheOnesItDoes()
+    {
+        using var handler = Stub("rules-search-with-contexts.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "javasecurity:S2076",
+            sections: ["how_to_fix"],
+            context: "spring",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(result.Sections.Count, Is.EqualTo(2));
+        Assert.That(result.Note, Contains.Substring("no 'spring' variant").Using(StringComparison.Ordinal));
+        Assert.That(result.Note, Contains.Substring("java_lang_package, apache_commons").Using(StringComparison.Ordinal));
+    }
+
+    [Test]
+    public async Task AContextOnARuleWithoutVariantsIsSaidToChangeNothing()
+    {
+        using var handler = Stub("rules-search-with-sections.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.GetRuleAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            "csharpsquid:S2259",
+            context: "spring",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(result.Sections, Is.Not.Empty);
+        Assert.That(result.Note, Contains.Substring("no framework variants").Using(StringComparison.Ordinal));
     }
 
     [Test]
@@ -2072,6 +2255,37 @@ public class ToolBehaviourTests
         Assert.That(result.AvailableTransitions, Is.EqualTo<string[]>(["reopen"]));
     }
 
+    /// <summary>
+    /// The re-read has to name the issue's scope: a key alone falls back to the main branch, where a
+    /// pull request's issue does not exist (C13).
+    /// </summary>
+    [Test]
+    public async Task TheExtraReadAfterATransitionIsScopedToTheIssuesPullRequest()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson(ToolPayloads.TransitionWithoutTransitions.Replace(
+            "\"project\": \"quartznet_quartznet\",",
+            "\"project\": \"quartznet_quartznet\", \"pullRequest\": \"3735\",",
+            StringComparison.Ordinal));
+        handler.EnqueueJson(ToolPayloads.TransitionReread);
+
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueWriteTools.TransitionIssueAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            IssueKey,
+            "resolve",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var reread = handler.Requests[1].Uri;
+
+        Assert.That(RequestUrl.QueryValue(reread, "componentKeys"), Is.EqualTo(Project));
+        Assert.That(RequestUrl.QueryValue(reread, "pullRequest"), Is.EqualTo("3735"));
+        Assert.That(RequestUrl.QueryValue(reread, "branch"), Is.Null);
+        Assert.That(result.AvailableTransitions, Is.EqualTo<string[]>(["reopen"]));
+    }
+
     [Test]
     public async Task AnUnknownTransitionExplainsWhatToCallFirstAndWhatAcceptReplaced()
     {
@@ -2886,6 +3100,46 @@ public class ToolBehaviourTests
         {
             ToolErrors.UseOptions(ToolTestHost.CreateOptions());
         }
+    }
+
+    /// <summary>
+    /// Once SonarQube Cloud has migrated a project's hotspots into former-hotspot issues, this endpoint
+    /// answers with nothing, which must not read as "no security findings".
+    /// </summary>
+    [Test]
+    public async Task AnEmptyHotspotSearchPointsAtTheMigratedIssues()
+    {
+        using var handler = new StubHttpMessageHandler();
+        handler.EnqueueJson("""{"paging":{"pageIndex":1,"pageSize":50,"total":0},"hotspots":[],"components":[]}""");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SearchHotspotsAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(result.Hotspots, Is.Empty);
+        Assert.That(result.Note, Contains.Substring("tags=former-hotspot").Using(StringComparison.Ordinal));
+    }
+
+    [Test]
+    public async Task SummarizeIssuesGroupsBySecurityStandardUnderTheirOwnFacetNames()
+    {
+        using var handler = Stub("issues-search-facets.json");
+        using var client = ToolTestHost.CreateClient(handler);
+
+        var result = await IssueReadTools.SummarizeIssuesAsync(
+            client,
+            ToolTestHost.CreateOptions(),
+            groupBy: ["owaspTop10-2021", "CWE", "sonarsourceSecurity"],
+            authors: ["ada@example.com"],
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(Query(handler, "facets"), Is.EqualTo("owaspTop10-2021,cwe,sonarsourceSecurity"));
+        Assert.That(Query(handler, "author"), Is.EqualTo("ada@example.com"));
+        Assert.That(
+            result.Facets.Select(facet => facet.GroupBy),
+            Is.EqualTo<string[]>(["owaspTop10-2021", "cwe", "sonarsourceSecurity"]));
     }
 
     private static StubHttpMessageHandler Stub(string fixture)

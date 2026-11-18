@@ -52,6 +52,22 @@ public class ResultMapperTests
     }
 
     /// <summary>
+    /// The SCM author reaches the single-issue result; an anonymous response has none, so it comes
+    /// from the DTO rather than from a fixture.
+    /// </summary>
+    [Test]
+    public void AnIssuesScmAuthorIsReportedOnTheDetailNotAsTheAssignee()
+    {
+        var issue = new IssueDto { Key = "k", Author = "ada@example.com", Assignee = "bob@github" };
+
+        var detail = ResultMapper.Detail(
+            issue, new Dictionary<string, string>(), new Dictionary<string, string>(), default, BaseUrl);
+
+        Assert.That(detail.Author, Is.EqualTo("ada@example.com"));
+        Assert.That(detail.Assignee, Is.EqualTo("bob@github"));
+    }
+
+    /// <summary>
     /// The sidecar is SonarQube's, not ours. A response that listed the same component twice would
     /// take down a whole issue search over a detail no caller can see.
     /// </summary>

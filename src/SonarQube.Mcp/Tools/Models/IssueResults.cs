@@ -29,6 +29,12 @@ internal sealed record IssueSummary
     /// <summary>The rule's title, when the response carried the rule sidecar.</summary>
     public string? RuleName { get; init; }
 
+    /// <summary>
+    /// The framework variant of the rule that applies here (<c>spring</c>, <c>servlet</c>), for a rule
+    /// that documents its fix per framework. Pass it to getRule as <c>context</c>.
+    /// </summary>
+    public string? RuleContext { get; init; }
+
     /// <summary>What the rule flagged here — the actionable sentence.</summary>
     public string? Message { get; init; }
 
@@ -187,6 +193,9 @@ internal sealed record IssueDetail
     /// <summary>The rule's title.</summary>
     public string? RuleName { get; init; }
 
+    /// <summary>The framework variant of the rule that applies here; getRule's <c>context</c>.</summary>
+    public string? RuleContext { get; init; }
+
     /// <summary>What the rule flagged here.</summary>
     public string? Message { get; init; }
 
@@ -228,6 +237,12 @@ internal sealed record IssueDetail
 
     /// <summary>The assignee's login.</summary>
     public string? Assignee { get; init; }
+
+    /// <summary>
+    /// The SCM author of the line - the commit identity, usually an email, not a SonarQube login and
+    /// not the assignee. Absent when the server has no token: anonymous responses leave it out.
+    /// </summary>
+    public string? Author { get; init; }
 
     /// <summary>SonarQube's remediation estimate.</summary>
     public string? Effort { get; init; }
@@ -271,6 +286,9 @@ internal sealed record RuleSection
     /// contexts returns the same section key more than once, one per context.
     /// </summary>
     public string? Context { get; init; }
+
+    /// <summary>The variant's key - what an issue reports as <c>ruleContext</c>.</summary>
+    public string? ContextKey { get; init; }
 }
 
 /// <summary>One rule: what it flags, how severe SonarQube considers it, and how to fix it.</summary>

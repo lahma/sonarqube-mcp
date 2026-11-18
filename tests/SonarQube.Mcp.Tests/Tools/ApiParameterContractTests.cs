@@ -62,10 +62,6 @@ internal static class SonarApiParameters
         new("project_branches/list", "project"),
         new("project_pull_requests/list", "project"),
 
-        new("qualitygates/project_status", "projectKey"),
-        new("qualitygates/project_status", "branch"),
-        new("qualitygates/project_status", "pullRequest"),
-
         // ------------------------------------------------------------------ issues
         new("issues/search", "componentKeys"),
         new("issues/search", "issues"),
@@ -76,6 +72,8 @@ internal static class SonarApiParameters
         new("issues/search", "tags"),
         new("issues/search", "languages"),
         new("issues/search", "assignees"),
+        new("issues/search", "author"),
+        new("issues/search", "fixableByAgent"),
         new("issues/search", "createdAfter"),
         new("issues/search", "createdInLast"),
         new("issues/search", "sinceLeakPeriod"),
@@ -209,6 +207,11 @@ internal static class SonarApiParameters
 
         // Without it the project search also returns directories and files (2026-08-11).
         "components/search:qualifiers",
+
+        // Named by the action's changelog ("Added 'fixableByAgent' parameter", 20 Apr 2026) but not
+        // by its parameter list; true kept 796 of 5258 issues, a bogus parameter kept all of them,
+        // so it is read (2026-11-18).
+        "issues/search:fixableByAgent",
     ];
 
     /// <summary>
@@ -612,7 +615,7 @@ public class ApiParameterContractTests
 
         _ = await client.ListBranchesAsync(Project, cancellationToken);
         _ = await client.ListPullRequestsAsync(Project, cancellationToken);
-        _ = await client.GetQualityGateProjectStatusAsync(Project, "main", "3266", cancellationToken);
+        _ = await client.GetQualityGateAsync(Project, "main", "3266", cancellationToken);
 
         _ = await client.SearchIssuesAsync(
             componentKeys: [Project],
@@ -636,6 +639,8 @@ public class ApiParameterContractTests
             pullRequest: "3266",
             page: 1,
             pageSize: 10,
+            authors: ["ada@example.com", "bob@example.com"],
+            fixableByAgent: true,
             cancellationToken: cancellationToken);
 
         _ = await client.DoIssueTransitionAsync("AZ_xePOumT_q4T_1FWf8", "accept", "because", cancellationToken);

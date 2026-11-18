@@ -260,25 +260,63 @@ internal sealed class SonarApiClient : IDisposable
             .ConfigureAwait(false);
     }
 
-    /// <summary>Reads the quality gate verdict for a project, branch or pull request.</summary>
+    /// <summary>The measure that carries a scope's quality gate verdict.</summary>
+    internal const string AlertStatusMetric = "alert_status";
+
+    /// <summary>The measure that carries the gate's conditions, as JSON inside its string value.</summary>
+    internal const string QualityGateDetailsMetric = "quality_gate_details";
+
+    private static readonly string[] QualityGateMetricKeys = [AlertStatusMetric, QualityGateDetailsMetric];
+
+    /// <summary>Reads the quality gate verdict and its conditions for a project, branch or pull request.</summary>
     /// <remarks>
-    /// <c>{"status":"NONE","conditions":[]}</c> is a successful response describing a scope with no
-    /// gate, not a failure.
+    /// <para>
+    /// Read from <c>api/measures/component</c>, not from <c>api/qualitygates/project_status</c>: that
+    /// action has been deprecated since 16 September 2025 and has no v2 successor, and the two measures
+    /// carry the same verdict and the same conditions (compared on 2026-11-18, quartznet_quartznet
+    /// pull request 4358: four identical conditions).
+    /// </para>
+    /// <para>
+    /// A scope never evaluated against a gate has neither measure — the empty instance this returns
+    /// then is the same "no gate" answer <c>project_status</c> spelled <c>NONE</c>, not an error.
+    /// </para>
     /// </remarks>
-    internal async Task<ProjectStatusResponseDto> GetQualityGateProjectStatusAsync(
+    internal async Task<QualityGateDetailsDto> GetQualityGateAsync(
         string projectKey,
         string? branch = null,
         string? pullRequest = null,
         CancellationToken cancellationToken = default)
     {
-        var url = SonarRequestBuilder.Api("qualitygates", "project_status")
-            .Query("projectKey", SonarRequestBuilder.RequireComponentKey(projectKey))
-            .Query("branch", branch)
-            .Query("pullRequest", pullRequest)
-            .Build();
-
-        return await GetAsync(url, SonarWireJsonContext.Default.ProjectStatusResponseDto, cancellationToken)
+        var response = await GetComponentMeasuresAsync(
+                projectKey, QualityGateMetricKeys, branch: branch, pullRequest: pullRequest,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+
+        var measures = response.Component?.Measures ?? [];
+        var status = measures.FirstOrDefault(x => x.Metric == AlertStatusMetric)?.Value;
+        var details = measures.FirstOrDefault(x => x.Metric == QualityGateDetailsMetric)?.Value;
+
+        var gate = details is null ? new QualityGateDetailsDto() : ParseQualityGateDetails(details);
+        return status is null ? gate : gate with { Level = status };
+    }
+
+    private static QualityGateDetailsDto ParseQualityGateDetails(string text)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(text, SonarWireJsonContext.Default.QualityGateDetailsDto)
+                   ?? new QualityGateDetailsDto();
+        }
+        catch (JsonException ex)
+        {
+            throw new SonarApiException(
+                HttpStatusCode.OK,
+                SyntheticError("SonarQube Cloud returned a quality_gate_details measure this server could not parse."),
+                rawBody: text,
+                retryAttempts: 0,
+                retryAfterSeconds: null,
+                ex);
+        }
     }
 
     // ------------------------------------------------------------------ issues
@@ -317,6 +355,11 @@ internal sealed class SonarApiClient : IDisposable
     /// <param name="pullRequest">Pull request scope, as the SCM number.</param>
     /// <param name="page">1-based page.</param>
     /// <param name="pageSize">Items per page.</param>
+    /// <param name="authors">SCM author accounts. Sent <b>repeated</b>, never comma-joined (C16).</param>
+    /// <param name="fixableByAgent">
+    /// <see langword="true"/> keeps only the issues SonarQube classifies as fixable by an agent. Not in
+    /// the catalogue's parameter list (C5) though its changelog names it; <c>false</c> does not filter.
+    /// </param>
     /// <param name="cancellationToken">Cancellation.</param>
     internal async Task<IssuesSearchResponseDto> SearchIssuesAsync(
         IReadOnlyList<string>? componentKeys = null,
@@ -340,6 +383,8 @@ internal sealed class SonarApiClient : IDisposable
         string? pullRequest = null,
         int? page = null,
         int? pageSize = null,
+        IReadOnlyList<string>? authors = null,
+        bool? fixableByAgent = null,
         CancellationToken cancellationToken = default)
     {
         RequirePaging(page, pageSize);
@@ -354,6 +399,8 @@ internal sealed class SonarApiClient : IDisposable
             .QueryList("tags", tags)
             .QueryList("languages", languages)
             .QueryList("assignees", assignees)
+            .QueryEach("author", authors)
+            .Query("fixableByAgent", fixableByAgent)
             .Query("createdAfter", createdAfter)
             .Query("createdInLast", createdInLast)
             .Query("sinceLeakPeriod", inNewCodePeriod)

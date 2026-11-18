@@ -32,10 +32,15 @@ internal sealed class IssueReadTools
     /// The sidecar arrays <c>searchIssues</c> asks for. Never <c>_all</c>: it drags a fifty-element
     /// <c>languages</c> array onto every response for a field nothing reads.
     /// </summary>
-    private static readonly string[] SearchAdditionalFields = ["rules"];
+    /// <remarks>
+    /// <c>ruleDescriptionContextKey</c> is an opt-in field like the sidecars: without it no issue
+    /// carries the key that picks its rule's framework-specific fix guidance (C15).
+    /// </remarks>
+    private static readonly string[] SearchAdditionalFields = ["rules", "ruleDescriptionContextKey"];
 
     /// <summary>What a single-issue read asks for: the transitions and comments a list cannot carry.</summary>
-    private static readonly string[] DetailAdditionalFields = ["transitions", "comments", "rules", "users"];
+    private static readonly string[] DetailAdditionalFields =
+        ["transitions", "comments", "rules", "users", "ruleDescriptionContextKey"];
 
     /// <summary>
     /// What a summary asks for: rule titles, so the <c>rules</c> grouping reports names rather than
@@ -86,12 +91,16 @@ internal sealed class IssueReadTools
         string[]? languages = null,
         [Description("Assignee logins to include. __me__ means the account the configured token belongs to.")]
         string[]? assignees = null,
+        [Description("SCM authors to include - the commit identity that wrote the line, usually an email (git config user.email), not a SonarQube login. Needs a token: anonymous requests are not told authors.")]
+        string[]? authors = null,
         [Description("Only issues created on or after this date: YYYY-MM-DD or a full ISO datetime. Mutually exclusive with createdInLast.")]
         string? createdAfter = null,
         [Description("Only issues created within this window ending now: a number followed by d, w, m or y (7d, 2w, 1m, 1y). Mutually exclusive with createdAfter.")]
         string? createdInLast = null,
         [Description("Only issues on code inside the project's new-code period. This is the same code a quality gate judges.")]
         bool? inNewCodePeriod = null,
+        [Description("true keeps only the issues SonarQube itself classifies as fixable by an AI agent. The classification is SonarQube's and undocumented; false is the same as omitting it.")]
+        bool? fixableByAgent = null,
         [Description("Sort field: CREATION_DATE, UPDATE_DATE, CLOSE_DATE, SEVERITY, STATUS, ASSIGNEE, FILE_LINE. Defaults to CREATION_DATE.")]
         string? sortBy = null,
         [Description("Sort ascending. Defaults to false, which puts the newest (or worst) issues first.")]
@@ -140,6 +149,8 @@ internal sealed class IssueReadTools
                     pullRequest: scope.PullRequest,
                     page: paging.Page,
                     pageSize: paging.PageSize,
+                    authors: ToolDefaults.CleanList(authors),
+                    fixableByAgent: fixableByAgent == true ? true : null,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
@@ -212,7 +223,7 @@ internal sealed class IssueReadTools
                     pullRequest: scope.PullRequest,
                     page: null,
                     pageSize: 1,
-                    cancellationToken)
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             if (response.Issues is not { Count: > 0 } issues || issues[0] is null)
@@ -258,6 +269,8 @@ internal sealed class IssueReadTools
         string ruleKey,
         [Description("Which description sections to return: introduction, root_cause, assess_the_problem, how_to_fix, resources. Defaults to introduction,root_cause,how_to_fix.")]
         string[]? sections = null,
+        [Description("The ruleContext an issue reported (spring, servlet...). Keeps only that framework's variant of each section the rule documents per framework; omit it to get every variant.")]
+        string? context = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -266,9 +279,9 @@ internal sealed class IssueReadTools
         var organization = ToolDefaults.RequireOrganization(options);
         var requestedSections = ToolDefaults.ResolveRuleSections(sections);
 
-        var context = new ToolCallContext("getRule", Project: null, Component: null, EntityKey: "rule " + key);
+        var call = new ToolCallContext("getRule", Project: null, Component: null, EntityKey: "rule " + key);
 
-        return await ToolErrors.ExecuteAsync(context, async () =>
+        return await ToolErrors.ExecuteAsync(call, async () =>
         {
             // rules/search, not rules/show: on SonarQube Cloud only this action has an `f` parameter,
             // and `f=descriptionSections` is the whole reason for the call.
@@ -282,7 +295,7 @@ internal sealed class IssueReadTools
                     "reports the exact key on every issue it returns.");
             }
 
-            return ResultMapper.Rule(rules[0], requestedSections, options.BaseUrlText);
+            return ResultMapper.Rule(rules[0], requestedSections, context, options.BaseUrlText);
         }).ConfigureAwait(false);
     }
 
@@ -294,8 +307,10 @@ internal sealed class IssueReadTools
         OpenWorld = true,
         UseStructuredContent = true)]
     [Description(
-        "Searches a project's security hotspots - code that is security-sensitive and needs a human decision, " +
-        "which is a different list from the issues searchIssues returns and is never included there. Defaults " +
+        "Searches a project's security hotspots - code that is security-sensitive and needs a human decision. " +
+        "SonarQube Cloud deprecated hotspots in June 2026 and is migrating them into issues tagged " +
+        "former-hotspot: once a project is migrated this returns nothing and searchIssues with " +
+        "tags=former-hotspot finds them instead, so an empty result is not proof of no security findings. Defaults " +
         "to every hotspot; pass status=TO_REVIEW for the ones nobody has looked at yet. Each result carries " +
         "vulnerabilityProbability (LOW/MEDIUM/HIGH), which is how likely SonarQube thinks it is to be real. " +
         "Note that assigneeId is an internal UUID on this endpoint, not a login. Results are paginated.")]
@@ -404,7 +419,7 @@ internal sealed class IssueReadTools
         UseStructuredContent = true)]
     [Description(
         "Counts a project's issues grouped by rule, file, directory, severity, quality, status, tag, " +
-        "language, assignee or author - in one call, without listing them. Use this before searchIssues " +
+        "language, assignee, author or security standard - in one call, without listing them. Use this before searchIssues " +
         "whenever the question is where the problems are concentrated rather than what an individual one " +
         "says: searchIssues can only reach the first 10000 results and would need dozens of pages to answer " +
         "it. Defaults to grouping by impactSeverities, rules and files. Two things to know when reading the " +
@@ -423,7 +438,7 @@ internal sealed class IssueReadTools
         string? branch = null,
         [Description("Pull request to summarize, as the SCM number in a string (\"3266\"). Mutually exclusive with branch.")]
         string? pullRequest = null,
-        [Description("What to group the counts by: rules, files, directories, tags, languages, assignees, authors, issueStatuses, impactSeverities, impactSoftwareQualities, cleanCodeAttributeCategories. Defaults to impactSeverities, rules and files.")]
+        [Description("What to group the counts by: rules, files, directories, tags, languages, assignees, authors, issueStatuses, impactSeverities, impactSoftwareQualities, cleanCodeAttributeCategories, or the security standards owaspTop10-2021, cwe and sonarsourceSecurity. Defaults to impactSeverities, rules and files.")]
         string[]? groupBy = null,
         [Description("Which statuses to count: OPEN, CONFIRMED, FALSE_POSITIVE, ACCEPTED, FIXED. Defaults to OPEN,CONFIRMED, which is the outstanding work.")]
         string[]? issueStatuses = null,
@@ -439,12 +454,16 @@ internal sealed class IssueReadTools
         string[]? languages = null,
         [Description("Assignee logins to count. __me__ means the account the configured token belongs to.")]
         string[]? assignees = null,
+        [Description("SCM authors to count - the commit identity that wrote the line, usually an email, not a SonarQube login. Needs a token.")]
+        string[]? authors = null,
         [Description("Only issues created on or after this date: YYYY-MM-DD or a full ISO datetime. Mutually exclusive with createdInLast.")]
         string? createdAfter = null,
         [Description("Only issues created within this window ending now: a number followed by d, w, m or y (7d, 2w, 1m, 1y). Mutually exclusive with createdAfter.")]
         string? createdInLast = null,
         [Description("Only issues on code inside the project's new-code period. This is the same code a quality gate judges.")]
         bool? inNewCodePeriod = null,
+        [Description("true counts only the issues SonarQube itself classifies as fixable by an AI agent (undocumented classification); false is the same as omitting it.")]
+        bool? fixableByAgent = null,
         [Description("What the counts measure: issues (the default) or effort, which counts SonarQube's estimated remediation minutes instead.")]
         string? countBy = null,
         CancellationToken cancellationToken = default)
@@ -492,6 +511,8 @@ internal sealed class IssueReadTools
                     pullRequest: scope.PullRequest,
                     page: null,
                     pageSize: 1,
+                    authors: ToolDefaults.CleanList(authors),
+                    fixableByAgent: fixableByAgent == true ? true : null,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 

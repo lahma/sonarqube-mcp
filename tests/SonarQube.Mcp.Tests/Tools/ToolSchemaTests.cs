@@ -63,17 +63,18 @@ public class ToolSchemaTests
     [TestCase(
         "searchIssues",
         "projectKey,component,branch,pullRequest,issueStatuses,impactSeverities,impactSoftwareQualities,rules,tags," +
-        "languages,assignees,createdAfter,createdInLast,inNewCodePeriod,sortBy,ascending,page,pageSize",
+        "languages,assignees,authors,createdAfter,createdInLast,inNewCodePeriod,fixableByAgent,sortBy,ascending," +
+        "page,pageSize",
         "")]
     [TestCase(
         "summarizeIssues",
         "projectKey,component,branch,pullRequest,groupBy,issueStatuses,impactSeverities," +
-        "impactSoftwareQualities,rules,tags,languages,assignees,createdAfter,createdInLast," +
-        "inNewCodePeriod,countBy",
+        "impactSoftwareQualities,rules,tags,languages,assignees,authors,createdAfter,createdInLast," +
+        "inNewCodePeriod,fixableByAgent,countBy",
         "")]
     [TestCase("getIssue", "issueKey,projectKey,branch,pullRequest", "issueKey")]
     [TestCase("getIssueChangelog", "issueKey,projectKey", "issueKey")]
-    [TestCase("getRule", "ruleKey,sections", "ruleKey")]
+    [TestCase("getRule", "ruleKey,sections,context", "ruleKey")]
     [TestCase(
         "searchHotspots",
         "projectKey,component,status,resolution,onlyMine,inNewCodePeriod,branch,pullRequest,page,pageSize",

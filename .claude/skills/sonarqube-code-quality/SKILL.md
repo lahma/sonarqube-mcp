@@ -106,8 +106,10 @@ comes back empty.
 
 ## A hotspot pass
 
-Hotspots are a separate list from issues and never appear in `searchIssues`. They are security
-decisions, and the decision is a human's.
+SonarQube Cloud is migrating hotspots into issues: a migrated one is an issue tagged
+`former-hotspot`, found with `searchIssues` (`tags="former-hotspot"`) and reviewed with
+`transitionIssue` — `accept` where a hotspot would have been marked SAFE — while `searchHotspots`
+lists only those not moved yet. Either way they are security decisions, and the decision is a human's.
 
 1. `searchHotspots` with `status="TO_REVIEW"` — the ones nobody has looked at.
 2. `getHotspot` — the risk description, what an attacker could do, how to make it safe, and

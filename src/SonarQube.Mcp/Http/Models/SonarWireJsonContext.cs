@@ -56,7 +56,7 @@ namespace SonarQube.Mcp.Http.Models;
 // Projects, components, quality gates, branches and pull requests.
 [JsonSerializable(typeof(ComponentsSearchResponseDto))]
 [JsonSerializable(typeof(ComponentsTreeResponseDto))]
-[JsonSerializable(typeof(ProjectStatusResponseDto))]
+[JsonSerializable(typeof(QualityGateDetailsDto))]
 [JsonSerializable(typeof(BranchesListResponseDto))]
 [JsonSerializable(typeof(PullRequestsListResponseDto))]
 

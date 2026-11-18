@@ -34,8 +34,6 @@ it, and a personal email address does not need a second home in a public reposit
 | `measures-component-tree.json` | `GET api/measures/component_tree?component=quartznet_quartznet&metricKeys=ncloc,complexity&strategy=leaves&qualifiers=FIL&ps=2&p=1&s=metric&metricSort=ncloc&metricSortFilter=withMeasuresOnly&asc=false` | The metric-sorted "worst files" query. |
 | `measures-search-history.json` | `GET api/measures/search_history?component=quartznet_quartznet&metrics=ncloc,coverage&ps=3&p=1` | `coverage`'s history entries have a `date` and **no `value`** — a gap, not a zero. `total` is 29, which counts *analyses*, not measures. |
 | `metrics-search.json` | `GET api/metrics/search?ps=500` | All 155 metric definitions, 32 KB, untrimmed. **No `f` parameter** — see the corrections section. Flat paging only. |
-| `qualitygates-project-status-none.json` | `GET api/qualitygates/project_status?projectKey=quartznet_quartznet` | `{"status":"NONE","conditions":[],"periods":[]}` — the normal answer for an ungated scope. |
-| `qualitygates-project-status-error.json` | `GET api/qualitygates/project_status?projectKey=quartznet_quartznet&pullRequest=3267` | **Live, not synthetic** (the design expected this one to need a token). Pull request 3267 was failing its gate at capture time: `status: ERROR` with five conditions, two of them failing, all with `periodIndex: 1`. |
 | `components-search.json` | `GET api/components/search?organization=quartznet&qualifiers=TRK&ps=3&p=1` | Confirms `qualifiers` works on this action despite being undocumented. |
 | `components-tree-leaves.json` | `GET api/components/tree?component=quartznet_quartznet&strategy=leaves&qualifiers=FIL,UTS&ps=3&p=1` | Nested paging only; `baseComponent` carries `tags` and `visibility` that the file-level entries do not. |
 | `project-branches-list.json` | `GET api/project_branches/list?project=quartznet_quartznet` | Not paginated. The main branch's `status` has the three issue counts and **no** `qualityGateStatus`. |
@@ -129,6 +127,19 @@ facts, retrieved on 2026-09-09, not invented shapes:
 | `issues-changelog.json` | `response_example?controller=api/issues&action=changelog`, with the example's placeholder user and dates replaced by this organization's own | Two entries, the first carrying the two diffs a single transition produces (`resolution` and `status`). **Needs re-capturing with a token** to confirm against a live body. |
 | `issues-bulk-change.json` | `response_example?controller=api/issues&action=bulk_change` | `{"total":2,"success":1,"ignored":1,"failures":0}` — counts only. The endpoint names no issue, which is why `bulkUpdateIssues` says so rather than attributing them. |
 | `ce-component-failed.json` | `ce-component.json` with the `status`, `errorMessage`, `errorType` and `hasErrorStacktrace` fields of `response_example?controller=api/ce&action=component`'s failed task | The `FAILED` branch of `getAnalysisStatus`. A real capture would need a deliberately broken analysis on a public project. |
+
+## Live captures — 2026-11-18 (1.2.0)
+
+Anonymous, like the 2026-08-11 set. Two come from other public projects, for the same reason the
+coverage captures do: `quartznet_quartznet` has no pull request with a failing gate left, and no Java
+code for a rule that documents its fix per framework.
+
+| Fixture | Request | Notes |
+|---|---|---|
+| `measures-component-quality-gate-pr.json` | `GET api/measures/component?component=quartznet_quartznet&pullRequest=4358&metricKeys=alert_status,quality_gate_details` | **The C14 equivalence**: `alert_status: OK` and a `quality_gate_details` whose JSON-in-a-string carries the same four conditions `qualitygates/project_status` reports for the same pull request. The condition fields are spelled `metric`/`op`/`period`/`error`/`actual`/`level`, plus `ignoredConditions`. |
+| `measures-component-quality-gate-none.json` | `GET api/measures/component?component=quartznet_quartznet&metricKeys=alert_status,quality_gate_details` | `measures: []` — the main branch is not gated, and `project_status` answers `NONE` for it at the same moment. Absent is how NONE arrives. |
+| `measures-component-quality-gate-error.json` | `GET api/measures/component?component=apache_creadur-rat&pullRequest=749&metricKeys=alert_status,quality_gate_details` | **A red gate, live**: `ERROR` with six conditions, three of them failing (`new_reliability_rating` 4, `new_security_rating` 5, `new_coverage` 35.3). Replaces `qualitygates-project-status-error.json`, retired with `qualitygates-project-status-none.json` when C14 moved the tool off that endpoint; its pull request 3267 no longer exists (404). |
+| `issues-search-rule-context.json` | `GET api/issues/search?componentKeys=jspwiki-builder&rules=javasecurity:S5131&ps=1&p=1&additionalFields=rules,ruleDescriptionContextKey` | **C15**: the issue carries `ruleDescriptionContextKey: "jsp"` only because `ruleDescriptionContextKey` is in `additionalFields`; without it no issue carries the field. 22 KB for one issue because a taint rule's `flows` are long. |
 
 ## Corrections to the implementation design found while capturing
 

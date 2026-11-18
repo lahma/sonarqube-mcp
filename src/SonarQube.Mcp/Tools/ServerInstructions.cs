@@ -29,7 +29,7 @@ internal static class ServerInstructions
         - Numbers are as old as the last analysis, and a scanner step going green in CI only means the report was uploaded. After a build, call getAnalysisStatus before trusting a gate, an issue list or a measure.
         - Issues use the modern vocabulary: issueStatuses (OPEN, CONFIRMED, FALSE_POSITIVE, ACCEPTED, FIXED) and impactSeverities (INFO, LOW, MEDIUM, HIGH, BLOCKER). MINOR/MAJOR/CRITICAL and BUG/CODE_SMELL/VULNERABILITY are rejected with their modern equivalents.
         - searchIssues defaults to OPEN,CONFIRMED and only its first 10000 results are reachable, so narrow with component, rules or dates instead of paging; summarizeIssues counts a whole project by rule, file or severity in one call.
-        - Security hotspots are a separate list from issues and never appear in searchIssues.
+        - Security hotspots are being migrated into issues tagged former-hotspot: searchHotspots lists only those not yet moved, and searchIssues with tags=former-hotspot finds the rest.
         - A measure that is absent was not measured; it does not mean zero. missingMetrics names them. Rating metrics are returned as letters A-E, where A is best.
         - getRule explains a rule once; do not fetch it per issue. getIssue's availableTransitions is what transitionIssue accepts for that issue.
         - The write tools (transitionIssue, assignIssue, addIssueComment, setHotspotStatus, bulkUpdateIssues) take effect immediately on the real organization and are visible to everyone in it. Read the issue or hotspot first. With SONARQUBE_MCP_READ_ONLY set, they are not registered at all.

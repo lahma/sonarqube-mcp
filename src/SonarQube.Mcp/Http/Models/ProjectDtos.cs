@@ -31,81 +31,64 @@ internal sealed record ComponentsTreeResponseDto : PagedEnvelopeDto
     public IReadOnlyList<ComponentDto>? Components { get; init; }
 }
 
-/// <summary><c>api/qualitygates/project_status</c>.</summary>
-internal sealed record ProjectStatusResponseDto
-{
-    /// <summary>The gate's verdict for the requested scope.</summary>
-    [JsonPropertyName("projectStatus")]
-    public ProjectStatusDto? ProjectStatus { get; init; }
-}
-
 /// <summary>
-/// A quality gate's verdict.
+/// A quality gate verdict as SonarQube stores it: the JSON inside the <c>quality_gate_details</c>
+/// measure's string value, read from <c>api/measures/component</c>.
 /// </summary>
 /// <remarks>
-/// <c>{"status":"NONE","conditions":[],"periods":[]}</c> is the <b>normal</b> answer for a project
-/// or pull request that has not been analysed against a gate, not an error (verified live
-/// 2026-08-11). The tool layer says so explicitly rather than letting "NONE" read as a failure.
+/// The condition field names are this measure's own (<c>op</c>, <c>error</c>, <c>actual</c>,
+/// <c>level</c>, <c>period</c>) — neither <c>qualitygates/project_status</c>'s nor
+/// <c>qualitygates/list</c>'s. A scope that was never evaluated against a gate has no such measure at
+/// all; <see cref="SonarApiClient.GetQualityGateAsync"/> then returns an empty instance.
 /// </remarks>
-internal sealed record ProjectStatusDto
+internal sealed record QualityGateDetailsDto
 {
-    /// <summary><c>OK</c>, <c>ERROR</c> or <c>NONE</c>.</summary>
-    [JsonPropertyName("status")]
-    public string? Status { get; init; }
+    /// <summary>
+    /// <c>OK</c> or <c>ERROR</c>; <see langword="null"/> when the scope has no gate.
+    /// <see cref="SonarApiClient.GetQualityGateAsync"/> overwrites it with the <c>alert_status</c>
+    /// measure, which is the verdict SonarQube itself reports.
+    /// </summary>
+    [JsonPropertyName("level")]
+    public string? Level { get; init; }
 
     /// <summary>Every condition the gate evaluated, passing and failing alike.</summary>
     [JsonPropertyName("conditions")]
-    public IReadOnlyList<QualityGateConditionDto>? Conditions { get; init; }
-
-    /// <summary>The new-code periods the conditions were evaluated against.</summary>
-    [JsonPropertyName("periods")]
-    public IReadOnlyList<MeasurePeriodDto>? Periods { get; init; }
+    public IReadOnlyList<QualityGateDetailsConditionDto>? Conditions { get; init; }
 
     /// <summary>Whether some conditions were skipped because their metric had no value.</summary>
     [JsonPropertyName("ignoredConditions")]
     public bool? IgnoredConditions { get; init; }
-
-    /// <summary>Whether the gate is "Clean as You Code"-compliant.</summary>
-    [JsonPropertyName("caycStatus")]
-    public string? CaycStatus { get; init; }
 }
 
-/// <summary>
-/// One quality gate condition.
-/// </summary>
-/// <remarks>
-/// The field names here (<c>comparator</c>, <c>errorThreshold</c>) are <em>not</em> the ones
-/// <c>qualitygates/list</c> uses for the same concepts (<c>op</c>, <c>error</c>). Nothing here calls
-/// that endpoint, but a future tool that does must not reuse this DTO.
-/// </remarks>
-internal sealed record QualityGateConditionDto
+/// <summary>One condition inside <c>quality_gate_details</c>.</summary>
+internal sealed record QualityGateDetailsConditionDto
 {
-    /// <summary><c>OK</c> or <c>ERROR</c>.</summary>
-    [JsonPropertyName("status")]
-    public string? Status { get; init; }
-
     /// <summary>The metric being tested, for example <c>new_coverage</c>.</summary>
-    [JsonPropertyName("metricKey")]
-    public string? MetricKey { get; init; }
+    [JsonPropertyName("metric")]
+    public string? Metric { get; init; }
 
-    /// <summary><c>GT</c>, <c>LT</c>, <c>EQ</c> or <c>NE</c>.</summary>
-    [JsonPropertyName("comparator")]
-    public string? Comparator { get; init; }
+    /// <summary><c>GT</c> or <c>LT</c>: the direction in which the condition fails.</summary>
+    [JsonPropertyName("op")]
+    public string? Op { get; init; }
 
     /// <summary>
-    /// <c>1</c> when the condition applies to the new-code period. This is the only signal that
-    /// separates an "on new code" condition from an overall one.
+    /// <c>1</c> when the condition applies to the new-code period — the only signal that separates
+    /// an "on new code" condition from an overall one.
     /// </summary>
-    [JsonPropertyName("periodIndex")]
-    public int? PeriodIndex { get; init; }
+    [JsonPropertyName("period")]
+    public int? Period { get; init; }
 
     /// <summary>The threshold the condition fails at, as text.</summary>
-    [JsonPropertyName("errorThreshold")]
-    public string? ErrorThreshold { get; init; }
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
 
     /// <summary>The measured value, as text.</summary>
-    [JsonPropertyName("actualValue")]
-    public string? ActualValue { get; init; }
+    [JsonPropertyName("actual")]
+    public string? Actual { get; init; }
+
+    /// <summary><c>OK</c> or <c>ERROR</c>.</summary>
+    [JsonPropertyName("level")]
+    public string? Level { get; init; }
 }
 
 /// <summary><c>api/project_branches/list</c> — not paginated.</summary>
