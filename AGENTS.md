@@ -453,7 +453,7 @@ Complete, as of the initial implementation. Versions are centrally pinned in
   no token cache means nothing to encrypt at rest.
 - `tests/`: `xunit.v3`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`. No mocking or
   assertion libraries — use the hand-rolled `StubHttpMessageHandler`.
-- `build/`: `Fallout.Common` + `Fallout.Components` 10.4.0, plus `NuGet.Frameworks` 7.9.0 (see
+- `build/`: `Fallout.Common` + `Fallout.Components` 10.5.0, and nothing pinned beside them (see
   *Package budget changes*). The build project opts out of CPM.
 
 SourceLink needs no package reference — it is in-SDK on .NET 8 and later.
@@ -468,8 +468,8 @@ the failure is invisible locally. Fallout 10.4.0 brings 6.14.3 transitively thro
 `InvalidProjectFileException`. Nothing already referenced can supply 7.9.0.0 — Fallout's own
 `NuGet.Packaging` pin is the source of the older one — and pinning forward is safe in both
 directions because the runtime accepts a higher assembly version than the one requested. Nothing
-is added to `src/` or `tests/`: the production budget stays at three. Remove once Fallout ships a
-`NuGet.Packaging` new enough to bring 7.9.0 in on its own (Fallout-build/Fallout#638).
+is added to `src/` or `tests/`: the production budget stays at three. Removed on 2026-11-18, once
+Fallout 10.5.0 brought 7.9.0 in on its own (below).
 
 **2026-09-09 — version refresh, no ids added or removed.** `ModelContextProtocol` `[2.1.0]` to
 `[2.2.0]`, `Microsoft.Extensions.DependencyInjection` and `Microsoft.Extensions.Logging.Console`
@@ -489,8 +489,20 @@ is added to `src/` or `tests/`: the production budget stays at three. Remove onc
   still open on 2026-09-09, and both 10.4.0 and 11.0.18 declare `NuGet.Packaging` 6.14.3.
 - **`global.json`'s `10.0.100`.** `rollForward: latestFeature` already picks up 10.0.401.
 
+**2026-11-18 — Fallout 10.4.0 to 10.5.0, and the `NuGet.Frameworks` pin removed.** 10.5.0 brings
+`NuGet.Frameworks` and `NuGet.Packaging` 7.9.0 itself (Fallout-build/Fallout#677, which closed #638),
+the version .NET SDK 10.0.4xx binds, so the build project references the two Fallout packages and
+nothing else; the CI path (`GITHUB_ACTIONS=true`) is green without the pin. The bump also clears
+NU1902/NU1903 on the build project's restore: 10.4.0 brought System.Security.Cryptography.Pkcs and
+System.Security.Cryptography.Xml 10.0.10, which carry known high-severity advisories, and 10.5.0
+brings 10.0.13. The pin comes back, at **8.0.0**, if `global.json` moves to the .NET 11 SDK while a
+Fallout component still evaluates projects in-process: that SDK's `Microsoft.Build.dll` asks for
+`NuGet.Frameworks` 7.11.0.0, Fallout brings 7.9.0, and whether the evaluation fails depends on which
+copy loads first (reproduced in bitbucket-mcp, passed here by luck). 8.0.0 is the SDK's own copy and
+satisfies both SDKs; Fallout-build/Fallout#731 tracks the fix.
+
 The trusted-publishing exchange (D17) uses `Fallout.Common.Utilities.Net`, which arrives with
-`Fallout.Common` 10.4.0 as a transitive dependency — no new `PackageReference` anywhere, and
+`Fallout.Common` as a transitive dependency — no new `PackageReference` anywhere, and
 nothing added to `src/` or `tests/`.
 
 ## Layout
@@ -535,7 +547,7 @@ they are the ones to keep `README.md` in step with.
 
 ## Build
 
-The orchestrator is [Fallout](https://fallout.build) 10.4.0 (stable channel), the maintained
+The orchestrator is [Fallout](https://fallout.build) 10.5.0 (stable channel), the maintained
 hard fork of NUKE. The CLI is pinned in `.config/dotnet-tools.json` as `fallout.globaltool`
 (command `fallout`) and resolves `build/_build.csproj` by convention.
 
