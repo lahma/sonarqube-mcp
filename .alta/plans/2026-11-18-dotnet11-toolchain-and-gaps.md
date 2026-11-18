@@ -181,10 +181,10 @@ The open design question is how that job gets the nupkgs. The policy names `publ
 
 ## Phase 7: Release 1.2.0
 
-- [ ] `CHANGELOG.md` `# 1.2.0` entry. Bullets only; it is the version authority.
-- [ ] Versions: `.mcp/server.json` (both fields), `.claude-plugin/plugin.json` (version and `dnx` pin), and `VersionPrefix` in `Directory.Build.props`. `PluginManifestTests` and `McpServerManifestTests` enforce the first two.
-- [ ] `README.md`: the hotspot deprecation, any 4b parameters, and one sentence that `HTTPS_PROXY`/`NO_PROXY` are honoured.
-- [ ] CI green, `release` dry run green on all five legs. The user tags.
+- [x] `CHANGELOG.md` `# 1.2.0` entry. Bullets only; it is the version authority.
+- [x] Versions: `.mcp/server.json` (both fields), `.claude-plugin/plugin.json` (version and `dnx` pin), and `VersionPrefix` in `Directory.Build.props`. `PluginManifestTests` and `McpServerManifestTests` enforce the first two.
+- [x] `README.md`: the hotspot deprecation, any 4b parameters, and one sentence that `HTTPS_PROXY`/`NO_PROXY` are honoured.
+- [ ] CI green, `release` dry run green on all five legs, then tag `v1.2.0` (release approved by the user on 2026-11-18).
 
 ## Verification recipe (CI path, locally)
 

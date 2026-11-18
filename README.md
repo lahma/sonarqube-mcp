@@ -26,12 +26,12 @@ SonarQube Server — the self-hosted and Data Center editions — is explicitly 
 | `listPullRequests` | Lists the analysed pull requests with their gate status and new-code issue counts. Each entry's `key` is what the other tools take as `pullRequest`. | read-only, idempotent |
 | `getQualityGateStatus` | Reads the gate verdict for a project, branch or pull request. `failingConditions` is the pre-filtered list of what is actually wrong, with thresholds and measured values. | read-only, idempotent |
 | `getAnalysisStatus` | What SonarQube is doing with the project right now: analyses queued or running, and the last one that finished, each with the branch or pull request it was for and any error. Call it after a CI build — a green scanner step only means the report was uploaded. | read-only, idempotent |
-| `searchIssues` | Searches issues, newest first, each with its **file path**, line, message, rule and clean-code impacts. Defaults to the outstanding work (`OPEN`, `CONFIRMED`). The main triage tool. | read-only, idempotent |
-| `summarizeIssues` | Counts issues grouped by rule, file, directory, severity, quality, status, tag, language, assignee or author in one call, instead of paging toward the API's 10,000-result ceiling. Files come back as paths, not UUIDs. | read-only, idempotent |
+| `searchIssues` | Searches issues, newest first, each with its **file path**, line, message, rule and clean-code impacts. Defaults to the outstanding work (`OPEN`, `CONFIRMED`). Filters include the SCM `authors` who wrote the code and SonarQube's own `fixableByAgent` classification. The main triage tool. | read-only, idempotent |
+| `summarizeIssues` | Counts issues grouped by rule, file, directory, severity, quality, status, tag, language, assignee, author or security standard (OWASP Top 10 2021, CWE, SonarSource category) in one call, instead of paging toward the API's 10,000-result ceiling. Files come back as paths, not UUIDs. | read-only, idempotent |
 | `getIssue` | One issue in full: comments, the secondary locations that explain a data-flow finding, and `availableTransitions` — what `transitionIssue` will accept for it. Pass the `projectKey` and the same scope the search used. | read-only, idempotent |
 | `getIssueChangelog` | One issue's history: who changed its status, resolution or assignee, when, and from what. Read it before re-deciding something a reviewer already decided. | read-only, idempotent |
-| `getRule` | Explains one rule: what it flags, why it matters and how to fix it, with the HTML converted to text and code fenced. Call it once per rule, not once per issue. | read-only, idempotent |
-| `searchHotspots` | Searches security hotspots — security-sensitive code awaiting a human decision, a separate list from issues — with each one's vulnerability probability. | read-only, idempotent |
+| `getRule` | Explains one rule: what it flags, why it matters and how to fix it, with the HTML converted to text and code fenced. Call it once per rule, not once per issue; pass an issue's `ruleContext` as `context` to get only that framework's fix. | read-only, idempotent |
+| `searchHotspots` | Searches security hotspots — security-sensitive code awaiting a human decision — with each one's vulnerability probability. SonarQube Cloud is migrating hotspots into issues tagged `former-hotspot`; once a project is migrated this returns nothing and `searchIssues` finds them. | read-only, idempotent |
 | `getHotspot` | One hotspot in full: the risk, what an attacker could do, how to make it safe, the review history, and `canChangeStatus`. | read-only, idempotent |
 | `getComponentMeasures` | Reads named metrics for a project, directory or file. `missingMetrics` says what was not measured, `newCodeValue` carries the new-code number, and ratings come back as `A`–`E`. | read-only, idempotent |
 | `listComponentMeasures` | The same metrics for every component under a project or directory, one row per file, sortable by a metric — this is how to answer "which files are worst?". | read-only, idempotent |
@@ -78,7 +78,7 @@ named `sonarqube-mcp-{version}-{rid}` and contains the executable, `LICENSE` and
 | macOS Apple silicon | `osx-arm64` | `sonarqube-mcp-{version}-osx-arm64.tar.gz` |
 
 ```bash
-tar -xzf sonarqube-mcp-1.1.1-linux-x64.tar.gz
+tar -xzf sonarqube-mcp-1.2.0-linux-x64.tar.gz
 chmod +x sonarqube-mcp
 ./sonarqube-mcp --version
 ```
@@ -106,7 +106,7 @@ downloads and runs it in one step, so there is nothing to install and nothing to
 hand:
 
 ```bash
-dnx mcp-sonarqube@1.1.1 --yes status
+dnx mcp-sonarqube@1.2.0 --yes status
 ```
 
 `--yes` accepts the download prompt and is consumed by `dnx` itself; everything after it is passed
@@ -119,7 +119,7 @@ speaks MCP over stdio, which is how a client should launch it:
     "sonarqube": {
       "type": "stdio",
       "command": "dnx",
-      "args": ["mcp-sonarqube@1.1.1", "--yes"],
+      "args": ["mcp-sonarqube@1.2.0", "--yes"],
       "env": {
         "SONARQUBE_TOKEN": "...",
         "SONARQUBE_ORG": "my-org"
@@ -129,7 +129,7 @@ speaks MCP over stdio, which is how a client should launch it:
 }
 ```
 
-Pin the version (`@1.1.1`) rather than floating: an MCP server is something an agent runs on your
+Pin the version (`@1.2.0`) rather than floating: an MCP server is something an agent runs on your
 behalf, and a pinned version is one you decided to run. This half is framework-dependent, so it
 needs the .NET 10 SDK — if a client reports *the command "dnx" was not found*, that is what is
 missing.
@@ -281,6 +281,11 @@ the authority when this table and the binary disagree.
 | `SONARQUBE_URL` | `https://sonarcloud.io` | Base URL. Only `sonarcloud.io` and `sonarqube.us` over `https` are accepted; anything else is ignored with a warning on stderr. |
 | `SONARQUBE_MCP_DEFAULT_PROJECT` | — | Default for the `projectKey` tool argument. The `id` in a project URL, not the repository name. |
 | `SONARQUBE_MCP_READ_ONLY` | `0` | `1` registers only the eighteen read tools; the five write tools are absent from `tools/list`. Accepts `1/true/yes/on` and `0/false/no/off`. |
+| `SONARQUBE_MCP_LOG_LEVEL` | `Information` | Minimum level for the stderr logger: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. |
+| `SONARQUBE_MCP_MAX_PAGE_SIZE` | `100` | Ceiling on a tool's `pageSize`, 1–500. 500 is the API's own hard limit. |
+| `SONARQUBE_MCP_DEFAULT_PAGE_SIZE` | `50` | The `pageSize` a tool uses when the call omits it. Clamped to the ceiling above. |
+| `SONARQUBE_MCP_MAX_SOURCE_LINES` | `2000` | Cap on `getFileCoverage`'s `from`–`to` span, 1–20000. |
+| `SONARQUBE_MCP_HTTP_TIMEOUT_SECONDS` | `100` | Whole-request timeout, 5–600. |
 
 Installed as a Claude Code plugin, the five variables above that the plugin prompts for arrive as
 `CLAUDE_PLUGIN_OPTION_SONARQUBE_TOKEN` and friends. Those are read **first** and a blank one counts
@@ -288,11 +293,9 @@ as unset, so leaving a prompt empty falls through to whatever your own environme
 rather than blanking it — which is what an earlier version did, with the failure surfacing as
 `404 Project doesn't exist` on a project key that was correct. You never set these by hand;
 `sonarqube-mcp status` reports which variable the token actually came from.
-| `SONARQUBE_MCP_LOG_LEVEL` | `Information` | Minimum level for the stderr logger: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. |
-| `SONARQUBE_MCP_MAX_PAGE_SIZE` | `100` | Ceiling on a tool's `pageSize`, 1–500. 500 is the API's own hard limit. |
-| `SONARQUBE_MCP_DEFAULT_PAGE_SIZE` | `50` | The `pageSize` a tool uses when the call omits it. Clamped to the ceiling above. |
-| `SONARQUBE_MCP_MAX_SOURCE_LINES` | `2000` | Cap on `getFileCoverage`'s `from`–`to` span, 1–20000. |
-| `SONARQUBE_MCP_HTTP_TIMEOUT_SECONDS` | `100` | Whole-request timeout, 5–600. |
+
+Requests go through the proxy that `HTTPS_PROXY` names, with `NO_PROXY` exempting hosts, as for any
+.NET HTTP client; the server sets no proxy of its own.
 
 ## Usage
 
@@ -370,7 +373,7 @@ Two more passes worth knowing, both described in full in the shipped skill:
 
 ```
 $ sonarqube-mcp status
-sonarqube-mcp 1.1.1
+sonarqube-mcp 1.2.0
 
 Configuration
   Base URL:          https://sonarcloud.io
