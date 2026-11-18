@@ -3,7 +3,9 @@
 #
 # Every leg runs `fallout SmokeTest`, which depends on PublishAot - so each leg builds its own
 # Native AOT binary, drives a real stdio JSON-RPC handshake against it, and only then uploads the
-# archive. Nothing reaches a release without having answered `initialize` and `tools/list` on the
+# archive. `PackRuntime` then packs the leg's RID-specific tool package (D17) and handshakes the
+# binary inside it too; the tag's publish.yml run collects the five packages from here, because
+# only a runner of the target OS can build them and only publish.yml may push them. Nothing reaches a release without having answered `initialize` and `tools/list` on the
 # hardware it was compiled for; the arm64 legs run on arm64 runners for exactly that reason.
 #
 # Action majors are pinned to match the generated build.yml (checkout@v7, setup-dotnet@v6);
@@ -61,13 +63,20 @@ jobs:
           global-json-file: global.json
       - name: 'Restore: dotnet tools'
         run: dotnet tool restore
-      - name: 'Run: SmokeTest'
-        run: dotnet fallout SmokeTest --runtime ${{ matrix.rid }}
+      - name: 'Run: SmokeTest, PackRuntime'
+        run: dotnet fallout SmokeTest PackRuntime --runtime ${{ matrix.rid }}
       - name: 'Upload: archives'
         uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.rid }}
           path: artifacts/archives/*
+          if-no-files-found: error
+      # The name is the contract with Build.Publish.cs's RuntimePackageArtifactPrefix.
+      - name: 'Upload: tool package'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tool-package-${{ matrix.rid }}
+          path: artifacts/packages/*.nupkg
           if-no-files-found: error
 
   release:
