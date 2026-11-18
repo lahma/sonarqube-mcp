@@ -1,8 +1,8 @@
 using System.Text.Json;
 
-using SonarQube.Mcp.Configuration;
+using NUnit.Framework;
 
-using Xunit;
+using SonarQube.Mcp.Configuration;
 
 namespace SonarQube.Mcp.Tests;
 
@@ -60,7 +60,7 @@ public class PluginManifestTests
     /// canonical <c>SKILL.md</c> under <c>.claude/skills/</c> instead of a second copy. A plugin
     /// cannot reference files outside its own root, so any other source would force a duplicate.
     /// </summary>
-    [Fact]
+    [Test]
     public void TheMarketplaceListsThisRepositoryAsItsOnePlugin()
     {
         var root = FindRepositoryRoot();
@@ -68,17 +68,19 @@ public class PluginManifestTests
         using var marketplace = Read(root, MarketplacePath);
         using var plugin = Read(root, PluginPath);
 
-        Assert.Equal(PluginName, marketplace.RootElement.GetProperty("name").GetString());
+        Assert.That(marketplace.RootElement.GetProperty("name").GetString(), Is.EqualTo(PluginName));
 
-        Assert.False(
+        Assert.That(
             string.IsNullOrWhiteSpace(marketplace.RootElement.GetProperty("owner").GetProperty("name").GetString()),
+            Is.False,
             "A marketplace needs an owner name; users see it before they trust the source.");
 
         var entries = marketplace.RootElement.GetProperty("plugins").EnumerateArray().ToList();
-        var entry = Assert.Single(entries);
+        Assert.That(entries, Has.Exactly(1).Items);
+        var entry = entries.Single();
 
-        Assert.Equal(plugin.RootElement.GetProperty("name").GetString(), entry.GetProperty("name").GetString());
-        Assert.Equal("./", entry.GetProperty("source").GetString());
+        Assert.That(entry.GetProperty("name").GetString(), Is.EqualTo(plugin.RootElement.GetProperty("name").GetString()));
+        Assert.That(entry.GetProperty("source").GetString(), Is.EqualTo("./"));
     }
 
     /// <summary>
@@ -86,14 +88,14 @@ public class PluginManifestTests
     /// plugin <c>version</c> is what Claude Code keys updates off: leave it behind and users are
     /// told they are already up to date.
     /// </summary>
-    [Fact]
+    [Test]
     public void ThePluginVersionIsTheVersionAuthority()
     {
         var root = FindRepositoryRoot();
 
         using var plugin = Read(root, PluginPath);
 
-        Assert.Equal(ReadChangelogVersion(root), plugin.RootElement.GetProperty("version").GetString());
+        Assert.That(plugin.RootElement.GetProperty("version").GetString(), Is.EqualTo(ReadChangelogVersion(root)));
     }
 
     /// <summary>
@@ -107,7 +109,7 @@ public class PluginManifestTests
     /// <c>&lt;PackageId&gt;</c>, so a rename of the package has exactly one place to be made and
     /// this assertion follows it instead of having to be remembered.
     /// </remarks>
-    [Fact]
+    [Test]
     public void TheBundledServerIsPinnedToThatSameVersion()
     {
         var root = FindRepositoryRoot();
@@ -124,14 +126,14 @@ public class PluginManifestTests
             .Select(argument => argument.GetString())
             .ToList();
 
-        Assert.Contains($"{packageId}@{version}", arguments);
+        Assert.That(arguments, Does.Contain($"{packageId}@{version}"));
     }
 
     /// <summary>
     /// The manifest names the skill directory explicitly, because the plugin's source is the
     /// repository root and the default <c>skills/</c> scan would otherwise find nothing.
     /// </summary>
-    [Fact]
+    [Test]
     public void EveryDeclaredSkillPathResolvesToASkill()
     {
         var root = FindRepositoryRoot();
@@ -143,16 +145,17 @@ public class PluginManifestTests
             .Select(path => path.GetString()!)
             .ToList();
 
-        Assert.NotEmpty(paths);
+        Assert.That(paths, Is.Not.Empty);
 
         foreach (var path in paths)
         {
-            Assert.StartsWith("./", path, StringComparison.Ordinal);
+            Assert.That(path, Does.StartWith("./").Using(StringComparison.Ordinal));
 
             var skill = Path.Combine(root, path[2..].Replace('/', Path.DirectorySeparatorChar), "SKILL.md");
 
-            Assert.True(
+            Assert.That(
                 File.Exists(skill),
+                Is.True,
                 $"{PluginPath} declares the skill path '{path}', which has no SKILL.md. The plugin would "
                 + "install with no skill at all.");
         }
@@ -164,7 +167,7 @@ public class PluginManifestTests
     /// <c>${user_config.…}</c> is handed to the server as a literal value, which for the token means
     /// a literal credential.
     /// </summary>
-    [Fact]
+    [Test]
     public void EveryDocumentedVariableIsPromptedForAndPassedThrough()
     {
         var root = FindRepositoryRoot();
@@ -192,14 +195,15 @@ public class PluginManifestTests
         // SONARQUBE_TOKEN would set that variable to "" in the child process and shadow a value the
         // user already had in their environment. The server reads the prefixed name first and falls
         // back to the plain one, so blank means "not configured" instead of "configured as empty".
-        Assert.Equal(
-            documented.Keys.Select(name => SonarQubeMcpOptions.PluginOptionPrefix + name).OrderBy(name => name, StringComparer.Ordinal),
-            passed.Keys.OrderBy(name => name, StringComparer.Ordinal));
+        Assert.That(
+            passed.Keys.OrderBy(name => name, StringComparer.Ordinal),
+            Is.EqualTo(documented.Keys.Select(name => SonarQubeMcpOptions.PluginOptionPrefix + name).OrderBy(name => name, StringComparer.Ordinal)));
 
         foreach (var name in documented.Keys)
         {
-            Assert.False(
+            Assert.That(
                 passed.ContainsKey(name),
+                Is.False,
                 $"The manifest maps {name} directly. An unset option substitutes as the empty string, "
                 + $"which would shadow a {name} the user already has in their environment (issue #1). "
                 + $"Map it to {SonarQubeMcpOptions.PluginOptionPrefix}{name} instead.");
@@ -209,22 +213,25 @@ public class PluginManifestTests
         {
             var placeholder = passed[SonarQubeMcpOptions.PluginOptionPrefix + name];
 
-            Assert.True(
+            Assert.That(
                 placeholder.StartsWith("${user_config.", StringComparison.Ordinal)
                 && placeholder.EndsWith('}'),
+                Is.True,
                 $"{name} is passed as '{placeholder}', which is a literal, not a configured value.");
 
             var key = placeholder["${user_config.".Length..^1];
 
-            Assert.True(
+            Assert.That(
                 options.TryGetProperty(key, out var option),
+                Is.True,
                 $"{name} substitutes '{key}', which no userConfig option declares. The server would receive "
                 + "the placeholder text as its value.");
 
             var sensitive = option.TryGetProperty("sensitive", out var flag) && flag.GetBoolean();
 
-            Assert.True(
+            Assert.That(
                 sensitive == isSecret,
+                Is.True,
                 $"{name} is {(isSecret ? "secret" : "not secret")} in {ServerManifestPath} but "
                 + $"{(sensitive ? "sensitive" : "not sensitive")} in {PluginPath}. A secret that is not marked "
                 + "sensitive is written to settings.json in the clear.");
@@ -248,7 +255,7 @@ public class PluginManifestTests
     {
         var servers = plugin.RootElement.GetProperty("mcpServers").EnumerateObject().ToList();
 
-        Assert.Single(servers);
+        Assert.That(servers, Has.Exactly(1).Items);
         return servers[0].Value;
     }
 
@@ -257,7 +264,7 @@ public class PluginManifestTests
     {
         var first = File.ReadLines(Path.Combine(root, ChangelogPath)).First().Trim();
 
-        Assert.StartsWith("# ", first, StringComparison.Ordinal);
+        Assert.That(first, Does.StartWith("# ").Using(StringComparison.Ordinal));
         return first[2..].Trim();
     }
 

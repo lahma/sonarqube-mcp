@@ -1,10 +1,10 @@
 using System.Reflection;
 using System.Text.Json;
 
+using NUnit.Framework;
+
 using SonarQube.Mcp.Tests.Http;
 using SonarQube.Mcp.Tools;
-
-using Xunit;
 
 namespace SonarQube.Mcp.Tests.Tools;
 
@@ -256,25 +256,25 @@ public class ApiParameterContractTests
     /// grew a parameter nobody recorded — which is exactly the parameter the online leg would have
     /// told us about had it known to look.
     /// </summary>
-    [Fact]
+    [Test]
     public async Task EveryParameterTheClientSendsIsInTheTable()
     {
         var sent = await DriveEveryEndpointAsync();
         var unknown = Unknown(SonarApiParameters.Table, sent);
 
-        Assert.Empty(unknown);
+        Assert.That(unknown, Is.Empty);
     }
 
     /// <summary>
     /// The reverse direction: a row that no client method can produce is either a typo or a
     /// parameter that was removed, and either way the table has stopped describing this server.
     /// </summary>
-    [Fact]
+    [Test]
     public async Task EveryTableRowIsActuallySentBySomeClientMethod()
     {
         var sent = await DriveEveryEndpointAsync();
 
-        Assert.Empty(Unsent(SonarApiParameters.Table, sent));
+        Assert.That(Unsent(SonarApiParameters.Table, sent), Is.Empty);
     }
 
     /// <summary>
@@ -283,13 +283,13 @@ public class ApiParameterContractTests
     /// that row as never sent — otherwise the two tests above would pass just as happily against a
     /// client that had stopped sending anything at all.
     /// </summary>
-    [Fact]
+    [Test]
     public async Task TheContractCheckIsDiscriminating()
     {
         var sent = await DriveEveryEndpointAsync();
 
-        Assert.Empty(Unknown(SonarApiParameters.Table, sent));
-        Assert.Empty(Unsent(SonarApiParameters.Table, sent));
+        Assert.That(Unknown(SonarApiParameters.Table, sent), Is.Empty);
+        Assert.That(Unsent(SonarApiParameters.Table, sent), Is.Empty);
 
         // A deliberately incomplete copy: everything except the one parameter that makes
         // searchIssues default to the work that is still outstanding.
@@ -297,14 +297,14 @@ public class ApiParameterContractTests
             .Where(entry => entry.Action != "issues/search" || entry.Name != "issueStatuses")
             .ToArray();
 
-        Assert.Equal(["issues/search:issueStatuses"], Unknown(withoutARealRow, sent));
+        Assert.That(Unknown(withoutARealRow, sent), Is.EqualTo<string[]>(["issues/search:issueStatuses"]));
 
         // And a copy carrying a parameter this server has never sent.
         var withABogusRow = SonarApiParameters.Table
             .Append(new SonarApiParameter("issues/search", "definitelyNotAParameter"))
             .ToArray();
 
-        Assert.Equal(["issues/search:definitelyNotAParameter"], Unsent(withABogusRow, sent));
+        Assert.That(Unsent(withABogusRow, sent), Is.EqualTo<string[]>(["issues/search:definitelyNotAParameter"]));
     }
 
     /// <summary>
@@ -313,7 +313,7 @@ public class ApiParameterContractTests
     /// <b>key</b>. The failure mode of getting this wrong is an empty result, not an error, which
     /// is why it is a test and not a comment.
     /// </summary>
-    [Fact]
+    [Test]
     public async Task HotspotSearchFiltersByPathWhileIssueSearchFiltersByKey()
     {
         using var handler = new StubHttpMessageHandler();
@@ -326,26 +326,26 @@ public class ApiParameterContractTests
             client,
             options,
             component: "src/Widget.cs",
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
 
         _ = await IssueReadTools.SearchIssuesAsync(
             client,
             options,
             component: "src/Widget.cs",
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
 
-        Assert.Equal("src/Widget.cs", RequestUrl.QueryValue(handler.Requests[0].Uri, "files"));
-        Assert.Equal($"{Project}:src/Widget.cs", RequestUrl.QueryValue(handler.Requests[1].Uri, "componentKeys"));
+        Assert.That(RequestUrl.QueryValue(handler.Requests[0].Uri, "files"), Is.EqualTo("src/Widget.cs"));
+        Assert.That(RequestUrl.QueryValue(handler.Requests[1].Uri, "componentKeys"), Is.EqualTo($"{Project}:src/Widget.cs"));
 
         // The key form must not leak into `files`: it matches nothing, silently.
-        Assert.DoesNotContain(':', RequestUrl.QueryValue(handler.Requests[0].Uri, "files")!);
+        Assert.That(RequestUrl.QueryValue(handler.Requests[0].Uri, "files")!, Does.Not.Contain(':'));
     }
 
     /// <summary>
     /// The validators and the table must name the same values. Read by reflection so that a value
     /// set added to <c>ToolDefaults</c> without a row here fails rather than going unchecked.
     /// </summary>
-    [Fact]
+    [Test]
     public void ToolDefaultsValueSetsAreExactlyTheDocumentedOnes()
     {
         var actual = new Dictionary<string, string[]>(StringComparer.Ordinal);
@@ -358,13 +358,13 @@ public class ApiParameterContractTests
             }
         }
 
-        Assert.Equal(
-            SonarApiParameters.ValueSets.Keys.Order(StringComparer.Ordinal),
-            actual.Keys.Order(StringComparer.Ordinal));
+        Assert.That(
+            actual.Keys.Order(StringComparer.Ordinal),
+            Is.EqualTo(SonarApiParameters.ValueSets.Keys.Order(StringComparer.Ordinal)));
 
         foreach (var (name, expected) in SonarApiParameters.ValueSets)
         {
-            Assert.Equal(expected, actual[name]);
+            Assert.That(actual[name], Is.EqualTo(expected));
         }
     }
 
@@ -373,52 +373,53 @@ public class ApiParameterContractTests
     /// in it is one the matching validator accepts — so the agreement is behavioural and not just
     /// two arrays that happen to be spelled the same.
     /// </summary>
-    [Fact]
+    [Test]
     public void EveryDocumentedValueIsAcceptedByTheValidatorThatGuardsIt()
     {
         foreach (var entry in SonarApiParameters.Table.Where(entry => entry.ValueSet is not null))
         {
-            Assert.True(
+            Assert.That(
                 SonarApiParameters.ValueSets.ContainsKey(entry.ValueSet!),
+                Is.True,
                 $"{entry.Action}:{entry.Name} names the value set '{entry.ValueSet}', which does not exist.");
         }
 
-        Assert.Equal(
-            SonarApiParameters.ValueSets["IssueStatuses"],
-            ToolDefaults.ResolveIssueStatuses(SonarApiParameters.ValueSets["IssueStatuses"]));
+        Assert.That(
+            ToolDefaults.ResolveIssueStatuses(SonarApiParameters.ValueSets["IssueStatuses"]),
+            Is.EqualTo(SonarApiParameters.ValueSets["IssueStatuses"]));
 
-        Assert.Equal(
-            SonarApiParameters.ValueSets["ImpactSeverities"],
-            ToolDefaults.ResolveImpactSeverities(SonarApiParameters.ValueSets["ImpactSeverities"]));
+        Assert.That(
+            ToolDefaults.ResolveImpactSeverities(SonarApiParameters.ValueSets["ImpactSeverities"]),
+            Is.EqualTo(SonarApiParameters.ValueSets["ImpactSeverities"]));
 
-        Assert.Equal(
-            SonarApiParameters.ValueSets["SoftwareQualities"],
-            ToolDefaults.ResolveImpactSoftwareQualities(SonarApiParameters.ValueSets["SoftwareQualities"]));
+        Assert.That(
+            ToolDefaults.ResolveImpactSoftwareQualities(SonarApiParameters.ValueSets["SoftwareQualities"]),
+            Is.EqualTo(SonarApiParameters.ValueSets["SoftwareQualities"]));
 
-        Assert.Equal(
-            SonarApiParameters.ValueSets["RuleSections"],
-            ToolDefaults.ResolveRuleSections(SonarApiParameters.ValueSets["RuleSections"]));
+        Assert.That(
+            ToolDefaults.ResolveRuleSections(SonarApiParameters.ValueSets["RuleSections"]),
+            Is.EqualTo(SonarApiParameters.ValueSets["RuleSections"]));
 
         foreach (var sort in SonarApiParameters.ValueSets["IssueSorts"])
         {
-            Assert.Equal(sort, ToolDefaults.ResolveIssueSort(sort));
+            Assert.That(ToolDefaults.ResolveIssueSort(sort), Is.EqualTo(sort));
         }
 
         foreach (var transition in SonarApiParameters.ValueSets["Transitions"])
         {
-            Assert.Equal(transition, ToolDefaults.ResolveTransition(transition));
+            Assert.That(ToolDefaults.ResolveTransition(transition), Is.EqualTo(transition));
         }
 
         foreach (var status in SonarApiParameters.ValueSets["HotspotStatuses"])
         {
             var resolution = string.Equals(status, "REVIEWED", StringComparison.Ordinal) ? "SAFE" : null;
 
-            Assert.Equal((status, resolution), ToolDefaults.ResolveHotspotStatus(status, resolution));
+            Assert.That(ToolDefaults.ResolveHotspotStatus(status, resolution), Is.EqualTo((status, resolution)));
         }
 
         foreach (var resolution in SonarApiParameters.ValueSets["HotspotResolutions"])
         {
-            Assert.Equal(("REVIEWED", resolution), ToolDefaults.ResolveHotspotStatus("REVIEWED", resolution));
+            Assert.That(ToolDefaults.ResolveHotspotStatus("REVIEWED", resolution), Is.EqualTo(("REVIEWED", resolution)));
         }
     }
 
@@ -431,15 +432,16 @@ public class ApiParameterContractTests
     /// network and because SonarSource can change the catalogue on a day this repository is not
     /// being worked on — which must never turn a CI run red.
     /// </summary>
-    [Fact]
-    [Trait("Category", "Live")]
+    [Test]
+    [Category("Live")]
     public async Task EveryParameterIsDocumentedOrExplicitlyVerified()
     {
-        Assert.SkipUnless(
-            string.Equals(Environment.GetEnvironmentVariable(LiveVariable), "1", StringComparison.Ordinal),
-            $"Set {LiveVariable}=1 to run the live API-catalogue check.");
+        if (!string.Equals(Environment.GetEnvironmentVariable(LiveVariable), "1", StringComparison.Ordinal))
+        {
+            Assert.Ignore($"Set {LiveVariable}=1 to run the live API-catalogue check.");
+        }
 
-        var documented = await FetchCatalogueAsync(TestContext.Current.CancellationToken);
+        var documented = await FetchCatalogueAsync(TestContext.CurrentContext.CancellationToken);
         var undocumented = new List<string>();
 
         foreach (var entry in SonarApiParameters.Table)
@@ -470,22 +472,23 @@ public class ApiParameterContractTests
             }
         }
 
-        Assert.Empty(undocumented);
+        Assert.That(undocumented, Is.Empty);
     }
 
     /// <summary>
     /// The exception lists must stay honest: an entry SonarSource has since documented, or an action
     /// that has appeared in the catalogue, should be deleted rather than carried forever.
     /// </summary>
-    [Fact]
-    [Trait("Category", "Live")]
+    [Test]
+    [Category("Live")]
     public async Task TheUndocumentedListStillDescribesReality()
     {
-        Assert.SkipUnless(
-            string.Equals(Environment.GetEnvironmentVariable(LiveVariable), "1", StringComparison.Ordinal),
-            $"Set {LiveVariable}=1 to run the live API-catalogue check.");
+        if (!string.Equals(Environment.GetEnvironmentVariable(LiveVariable), "1", StringComparison.Ordinal))
+        {
+            Assert.Ignore($"Set {LiveVariable}=1 to run the live API-catalogue check.");
+        }
 
-        var documented = await FetchCatalogueAsync(TestContext.Current.CancellationToken);
+        var documented = await FetchCatalogueAsync(TestContext.CurrentContext.CancellationToken);
         var stale = new List<string>();
 
         foreach (var identifier in SonarApiParameters.UndocumentedButVerified)
@@ -509,7 +512,7 @@ public class ApiParameterContractTests
             }
         }
 
-        Assert.Empty(stale);
+        Assert.That(stale, Is.Empty);
     }
 
     /// <summary>Reads <c>api/webservices/list</c> into an action-to-parameter-names map.</summary>
@@ -600,7 +603,7 @@ public class ApiParameterContractTests
         handler.Fallback = _ => StubHttpMessageHandler.CreateResponse(System.Net.HttpStatusCode.OK, "{}");
 
         using var client = ToolTestHost.CreateClient(handler);
-        var cancellationToken = TestContext.Current.CancellationToken;
+        var cancellationToken = TestContext.CurrentContext.CancellationToken;
 
         _ = await client.SearchComponentsAsync("quartznet", "quartz", 1, 10, cancellationToken);
 
@@ -674,7 +677,7 @@ public class ApiParameterContractTests
 
         // Nothing above may be skipped silently: a method that stopped sending a request would make
         // the table look complete while covering less than it claims.
-        Assert.Equal(22, handler.Requests.Count);
+        Assert.That(handler.Requests.Count, Is.EqualTo(22));
 
         var sent = new HashSet<string>(StringComparer.Ordinal);
 
@@ -701,7 +704,7 @@ public class ApiParameterContractTests
     {
         var path = RequestUrl.Path(uri);
 
-        Assert.StartsWith("/api/", path, StringComparison.Ordinal);
+        Assert.That(path, Does.StartWith("/api/").Using(StringComparison.Ordinal));
 
         return path[5..];
     }

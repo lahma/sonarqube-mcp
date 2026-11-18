@@ -1,6 +1,6 @@
-using SonarQube.Mcp.Tools;
+using NUnit.Framework;
 
-using Xunit;
+using SonarQube.Mcp.Tools;
 
 namespace SonarQube.Mcp.Tests.Tools;
 
@@ -19,32 +19,32 @@ public class HtmlToTextTests
     /// <summary>Long enough that nothing in these fixtures is truncated by accident.</summary>
     private const int NoCap = 4000;
 
-    [Fact]
+    [Test]
     public void APreCodeBlockBecomesExactlyOneFencedBlock()
     {
         var (text, truncated) = HtmlToText.Convert(
             "<p>Fix it:</p><pre><code>var x = 1;\nvar y = 2;</code></pre>",
             NoCap);
 
-        Assert.Equal("Fix it:\n\n```\nvar x = 1;\nvar y = 2;\n```", text);
-        Assert.False(truncated);
+        Assert.That(text, Is.EqualTo("Fix it:\n\n```\nvar x = 1;\nvar y = 2;\n```"));
+        Assert.That(truncated, Is.False);
     }
 
     /// <summary>
     /// <c>&lt;code&gt;</c> outside a <c>&lt;pre&gt;</c> is inline and must not fence: a sentence
     /// mentioning <c>null</c> is still a sentence.
     /// </summary>
-    [Fact]
+    [Test]
     public void InlineCodeIsNotFenced()
     {
         var (text, _) = HtmlToText.Convert(
             "<p>A reference to <code>null</code> should never be dereferenced.</p>",
             NoCap);
 
-        Assert.Equal("A reference to null should never be dereferenced.", text);
+        Assert.That(text, Is.EqualTo("A reference to null should never be dereferenced."));
     }
 
-    [Fact]
+    [Test]
     public void ListItemsBecomeBullets()
     {
         var (text, _) = HtmlToText.Convert(
@@ -53,10 +53,10 @@ public class HtmlToTextTests
 
         // A blank line between the bullets: </li> ends the line and the next <li> starts a new one,
         // which markdown reads as a loose list and renders the same way.
-        Assert.Equal("- First point\n\n- Second point", text);
+        Assert.That(text, Is.EqualTo("- First point\n\n- Second point"));
     }
 
-    [Fact]
+    [Test]
     public void HeadingsAndParagraphsBecomeLineBreaks()
     {
         var (text, _) = HtmlToText.Convert(
@@ -64,79 +64,77 @@ public class HtmlToTextTests
             NoCap);
 
         // One blank line per block boundary; <br> is a line break inside a block, not a boundary.
-        Assert.Equal("Why\n\nBecause.\n\nHow\n\nLike this.\nAnd this.", text);
+        Assert.That(text, Is.EqualTo("Why\n\nBecause.\n\nHow\n\nLike this.\nAnd this."));
     }
 
     /// <summary>A link's text is the part worth keeping; a URL a model cannot fetch is noise.</summary>
-    [Fact]
+    [Test]
     public void LinkTargetsAreDroppedAndTheirTextIsKept()
     {
         var (text, _) = HtmlToText.Convert(
             """<p>See <a href="https://cwe.mitre.org/data/definitions/476">CWE-476</a>.</p>""",
             NoCap);
 
-        Assert.Equal("See CWE-476.", text);
+        Assert.That(text, Is.EqualTo("See CWE-476."));
     }
 
-    [Theory]
-    [InlineData("a &amp; b", "a & b")]
-    [InlineData("&lt;script&gt;", "<script>")]
-    [InlineData("&quot;quoted&quot;", "\"quoted\"")]
-    [InlineData("it&apos;s", "it's")]
-    [InlineData("it&#39;s", "it's")]
-    [InlineData("provider&#x2019;s", "provider’s")]
-    [InlineData("a&nbsp;b", "a b")]
-    [InlineData("wait&hellip;", "wait…")]
-    [InlineData("a &mdash; b", "a — b")]
+    [TestCase("a &amp; b", "a & b")]
+    [TestCase("&lt;script&gt;", "<script>")]
+    [TestCase("&quot;quoted&quot;", "\"quoted\"")]
+    [TestCase("it&apos;s", "it's")]
+    [TestCase("it&#39;s", "it's")]
+    [TestCase("provider&#x2019;s", "provider’s")]
+    [TestCase("a&nbsp;b", "a b")]
+    [TestCase("wait&hellip;", "wait…")]
+    [TestCase("a &mdash; b", "a — b")]
     public void EntitiesAreUnescaped(string html, string expected) =>
-        Assert.Equal(expected, HtmlToText.Convert(html, NoCap).Text);
+        Assert.That(HtmlToText.Convert(html, NoCap).Text, Is.EqualTo(expected));
 
     /// <summary>
     /// An entity nobody can render is left visible rather than turned into an exception halfway
     /// through a rule description.
     /// </summary>
-    [Theory]
-    [InlineData("&nosuchentity;")]
-    [InlineData("&#xD800;")]
-    [InlineData("&#0;")]
+    [TestCase("&nosuchentity;")]
+    [TestCase("&#xD800;")]
+    [TestCase("&#0;")]
     public void AnUnreadableEntityIsLeftAsItWas(string html) =>
-        Assert.Equal(html, HtmlToText.Convert(html, NoCap).Text);
+        Assert.That(HtmlToText.Convert(html, NoCap).Text, Is.EqualTo(html));
 
     /// <summary>
     /// A bare ampersand in prose has no terminator anywhere near, and must not swallow the rest of
     /// the paragraph looking for one.
     /// </summary>
-    [Fact]
+    [Test]
     public void ABareAmpersandIsLeftAloneAndKeepsTheRestOfTheSentence()
     {
         var (text, _) = HtmlToText.Convert("Tom & Jerry are a well known pair of characters.", NoCap);
 
-        Assert.Equal("Tom & Jerry are a well known pair of characters.", text);
+        Assert.That(text, Is.EqualTo("Tom & Jerry are a well known pair of characters."));
     }
 
-    [Fact]
+    [Test]
     public void AttributesAndUnknownTagsAreStripped()
     {
         var (text, _) = HtmlToText.Convert(
             """<div class="rule"><span data-x="1">Text</span><em>!</em></div>""",
             NoCap);
 
-        Assert.Equal("Text!", text);
+        Assert.That(text, Is.EqualTo("Text!"));
     }
 
     /// <summary>
     /// An unterminated tag means everything after it is markup we cannot read; emitting it raw would
     /// put angle brackets into the model's context.
     /// </summary>
-    [Fact]
+    [Test]
     public void AnUnterminatedTagStopsTheConversionInsteadOfLeakingMarkup()
     {
         var (text, _) = HtmlToText.Convert("<p>Kept.</p><p class=\"broken", NoCap);
 
-        Assert.Equal("Kept.", text);
+        Assert.That(text, Is.EqualTo("Kept."));
     }
 
-    [Fact]
+    [Test]
     public void NestedBlockTagsDoNotLeaveARunOfBlankLines()
     {
         var (text, _) = HtmlToText.Convert(
@@ -144,50 +142,49 @@ public class HtmlToTextTests
             NoCap);
 
         // Three block tags close at the same point and still leave exactly one blank line.
-        Assert.Equal("One\n\nTwo", text);
-        Assert.DoesNotContain("\n\n\n", text, StringComparison.Ordinal);
+        Assert.That(text, Is.EqualTo("One\n\nTwo"));
+        Assert.That(text, !Contains.Substring("\n\n\n").Using(StringComparison.Ordinal));
     }
 
     /// <summary>Truncation is never silent: there is a visible marker and a flag beside it.</summary>
-    [Fact]
+    [Test]
     public void TextOverTheCapEndsWithAVisibleMarkerAndSaysSo()
     {
         var html = "<p>" + new string('x', 500) + "</p>";
 
         var (text, truncated) = HtmlToText.Convert(html, 100);
 
-        Assert.True(truncated);
-        Assert.Equal(100, text.Length);
-        Assert.EndsWith("… [truncated]", text, StringComparison.Ordinal);
+        Assert.That(truncated, Is.True);
+        Assert.That(text.Length, Is.EqualTo(100));
+        Assert.That(text, Does.EndWith("… [truncated]").Using(StringComparison.Ordinal));
     }
 
-    [Fact]
+    [Test]
     public void TextExactlyAtTheCapIsNotTruncated()
     {
         var (text, truncated) = HtmlToText.Convert(new string('x', 100), 100);
 
-        Assert.False(truncated);
-        Assert.Equal(100, text.Length);
-        Assert.DoesNotContain("truncated", text, StringComparison.Ordinal);
+        Assert.That(truncated, Is.False);
+        Assert.That(text.Length, Is.EqualTo(100));
+        Assert.That(text, !Contains.Substring("truncated").Using(StringComparison.Ordinal));
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   \n  ")]
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   \n  ")]
     public void NothingToConvertIsAnEmptyStringRatherThanNull(string? html)
     {
         var (text, truncated) = HtmlToText.Convert(html, NoCap);
 
-        Assert.Equal(string.Empty, text);
-        Assert.False(truncated);
+        Assert.That(text, Is.EqualTo(string.Empty));
+        Assert.That(truncated, Is.False);
     }
 
     /// <summary>
     /// The real thing: one of SonarQube's own <c>how_to_fix</c> sections, entities, diff attributes
     /// and all.
     /// </summary>
-    [Fact]
+    [Test]
     public void ARealRuleSectionSurvivesTheRoundTrip()
     {
         const string Html = """
@@ -203,11 +200,11 @@ public class HtmlToTextTests
 
         var (text, truncated) = HtmlToText.Convert(Html, NoCap);
 
-        Assert.False(truncated);
-        Assert.StartsWith("Compliant solution", text, StringComparison.Ordinal);
-        Assert.Contains("if (condition && o is not null)", text, StringComparison.Ordinal);
-        Assert.Equal(2, CountFences(text));
-        Assert.DoesNotContain("data-diff-id", text, StringComparison.Ordinal);
+        Assert.That(truncated, Is.False);
+        Assert.That(text, Does.StartWith("Compliant solution").Using(StringComparison.Ordinal));
+        Assert.That(text, Contains.Substring("if (condition && o is not null)").Using(StringComparison.Ordinal));
+        Assert.That(CountFences(text), Is.EqualTo(2));
+        Assert.That(text, !Contains.Substring("data-diff-id").Using(StringComparison.Ordinal));
     }
 
     private static int CountFences(string text)

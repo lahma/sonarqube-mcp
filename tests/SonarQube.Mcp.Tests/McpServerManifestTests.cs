@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Xml.Linq;
 
-using Xunit;
+using NUnit.Framework;
 
 namespace SonarQube.Mcp.Tests;
 
@@ -33,7 +33,7 @@ public class McpServerManifestTests
     private const string ChangelogPath = "CHANGELOG.md";
     private const string ServerProjectPath = "src/SonarQube.Mcp/SonarQube.Mcp.csproj";
 
-    [Fact]
+    [Test]
     public void ManifestVersionMatchesTheChangelog()
     {
         var root = FindRepositoryRoot();
@@ -42,11 +42,11 @@ public class McpServerManifestTests
         using var manifest = ReadManifest(root);
         var package = SingleNuGetPackage(manifest);
 
-        Assert.Equal(changelogVersion, manifest.RootElement.GetProperty("version").GetString());
-        Assert.Equal(changelogVersion, package.GetProperty("version").GetString());
+        Assert.That(manifest.RootElement.GetProperty("version").GetString(), Is.EqualTo(changelogVersion));
+        Assert.That(package.GetProperty("version").GetString(), Is.EqualTo(changelogVersion));
     }
 
-    [Fact]
+    [Test]
     public void ManifestIdentifierMatchesThePackagedId()
     {
         var root = FindRepositoryRoot();
@@ -57,10 +57,10 @@ public class McpServerManifestTests
             .Select(x => x.Value)
             .SingleOrDefault();
 
-        Assert.False(string.IsNullOrWhiteSpace(packageId), $"{ServerProjectPath} declares no <PackageId>.");
+        Assert.That(string.IsNullOrWhiteSpace(packageId), Is.False, $"{ServerProjectPath} declares no <PackageId>.");
 
         using var manifest = ReadManifest(root);
-        Assert.Equal(packageId, SingleNuGetPackage(manifest).GetProperty("identifier").GetString());
+        Assert.That(SingleNuGetPackage(manifest).GetProperty("identifier").GetString(), Is.EqualTo(packageId));
     }
 
     /// <summary>
@@ -68,7 +68,7 @@ public class McpServerManifestTests
     /// <c>nuget</c>, and the server speaks stdio only — a second entry or a different transport
     /// would silently change what clients are told to run.
     /// </summary>
-    [Fact]
+    [Test]
     public void ManifestDeclaresExactlyOneStdioNuGetPackage()
     {
         var root = FindRepositoryRoot();
@@ -76,8 +76,8 @@ public class McpServerManifestTests
 
         var package = SingleNuGetPackage(manifest);
 
-        Assert.Equal("stdio", package.GetProperty("transport").GetProperty("type").GetString());
-        Assert.Equal("io.github.lahma/sonarqube-mcp", manifest.RootElement.GetProperty("name").GetString());
+        Assert.That(package.GetProperty("transport").GetProperty("type").GetString(), Is.EqualTo("stdio"));
+        Assert.That(manifest.RootElement.GetProperty("name").GetString(), Is.EqualTo("io.github.lahma/sonarqube-mcp"));
     }
 
     /// <summary>
@@ -88,7 +88,7 @@ public class McpServerManifestTests
     /// limits) are deliberately absent: they are documented in the README for whoever runs the
     /// binary, not offered to whoever configures a client.
     /// </summary>
-    [Fact]
+    [Test]
     public void ManifestDeclaresTheClientFacingEnvironmentVariables()
     {
         var root = FindRepositoryRoot();
@@ -103,29 +103,30 @@ public class McpServerManifestTests
             .Select(variable => variable.GetProperty("name").GetString())
             .ToList();
 
-        Assert.Equal(
-            [
+        Assert.That(
+            names,
+            Is.EqualTo<string?[]>([
                 "SONARQUBE_TOKEN",
                 "SONARQUBE_ORG",
                 "SONARQUBE_URL",
                 "SONARQUBE_MCP_DEFAULT_PROJECT",
                 "SONARQUBE_MCP_READ_ONLY",
-            ],
-            names);
+            ]));
 
         foreach (var variable in variables)
         {
             var name = variable.GetProperty("name").GetString();
 
-            Assert.False(
+            Assert.That(
                 string.IsNullOrWhiteSpace(variable.GetProperty("description").GetString()),
+                Is.False,
                 $"{name} has no description; the description is what a client shows next to the prompt.");
 
             var isSecret = variable.TryGetProperty("isSecret", out var secret) && secret.GetBoolean();
             var isRequired = variable.TryGetProperty("isRequired", out var required) && required.GetBoolean();
 
-            Assert.Equal(name == "SONARQUBE_TOKEN", isSecret);
-            Assert.Equal(name == "SONARQUBE_TOKEN", isRequired);
+            Assert.That(isSecret, Is.EqualTo(name == "SONARQUBE_TOKEN"));
+            Assert.That(isRequired, Is.EqualTo(name == "SONARQUBE_TOKEN"));
         }
     }
 
@@ -136,7 +137,7 @@ public class McpServerManifestTests
             .Where(x => x.GetProperty("registryType").GetString() == "nuget")
             .ToList();
 
-        Assert.Single(packages);
+        Assert.That(packages, Has.Exactly(1).Items);
         return packages[0];
     }
 
@@ -151,7 +152,7 @@ public class McpServerManifestTests
     {
         var first = File.ReadLines(Path.Combine(root, ChangelogPath)).First().Trim();
 
-        Assert.StartsWith("# ", first, StringComparison.Ordinal);
+        Assert.That(first, Does.StartWith("# ").Using(StringComparison.Ordinal));
         return first[2..].Trim();
     }
 
